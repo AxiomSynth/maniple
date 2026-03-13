@@ -216,12 +216,14 @@ class ItermBackend(TerminalBackend):
         self,
         max_panes: int = MAX_PANES_PER_TAB,
         managed_session_ids: Optional[set[str]] = None,
+        target_window: Optional[str] = None,
     ) -> Optional[tuple["ItermWindow", "ItermTab", TerminalSession]]:
         """Find a window/tab with space for more panes."""
         result = await iterm_utils.find_available_window(
             self._app,
             max_panes=max_panes,
             managed_session_ids=managed_session_ids,
+            target_window=target_window,
         )
         if not result:
             return None

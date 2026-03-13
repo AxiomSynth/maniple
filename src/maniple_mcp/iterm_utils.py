@@ -987,6 +987,7 @@ async def find_available_window(
     app: "ItermApp",
     max_panes: int = MAX_PANES_PER_TAB,
     managed_session_ids: Optional[set[str]] = None,
+    target_window: Optional[str] = None,
 ) -> Optional[tuple["ItermWindow", "ItermTab", "ItermSession"]]:
     """
     Find a window with an available tab that has room for more panes.
@@ -994,6 +995,11 @@ async def find_available_window(
     Searches terminal windows for a tab with fewer than max_panes sessions.
     If managed_session_ids is provided, only considers tabs that contain
     at least one managed session (to avoid splitting into user's unrelated tabs).
+
+    If target_window is provided, only considers windows where at least one
+    session's name contains the target string (case-insensitive). This allows
+    spawning workers in a specific project's window by matching the session
+    name (e.g., target_window="sieve" finds the window running sieve-calendar).
 
     Note: When managed_session_ids is an empty set, no tabs will match (correct
     behavior - an empty registry means we have no managed sessions to reuse,
@@ -1006,15 +1012,34 @@ async def find_available_window(
             by claude-team. If provided (including empty set), only tabs
             containing at least one of these sessions will be considered.
             Pass None to consider all tabs.
+        target_window: Optional string to match against session names in the
+            window. When provided, only windows containing a session whose
+            name includes this string (case-insensitive) are considered.
+            Overrides managed_session_ids filtering when set.
 
     Returns:
         Tuple of (window, tab, session) if found, None if all tabs are full
     """
     for window in app.terminal_windows:
+        # If target_window specified, check if ANY session in this window matches
+        if target_window is not None:
+            window_matches = False
+            target_lower = target_window.lower()
+            for tab in window.tabs:
+                for s in tab.sessions:
+                    session_name = s.name or ""
+                    if target_lower in session_name.lower():
+                        window_matches = True
+                        break
+                if window_matches:
+                    break
+            if not window_matches:
+                continue
+
         for tab in window.tabs:
-            # If we have managed session IDs filter, check if this tab contains any
-            # Note: empty set is valid (matches nothing) - use `is not None` check
-            if managed_session_ids is not None:
+            # If we have managed session IDs filter (and no target_window override),
+            # check if this tab contains any managed sessions
+            if target_window is None and managed_session_ids is not None:
                 tab_has_managed = any(
                     s.session_id in managed_session_ids for s in tab.sessions
                 )

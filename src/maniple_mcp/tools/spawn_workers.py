@@ -61,6 +61,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
         ctx: Context[ServerSession, "AppContext"],
         workers: list[WorkerConfig],
         layout: Literal["auto", "new"] | None = None,
+        target_window: str | None = None,
     ) -> dict:
         """
         Spawn Claude Code worker sessions.
@@ -184,6 +185,12 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
         Args:
             workers: List of WorkerConfig dicts. Must have 1-4 workers.
             layout: "auto" (reuse windows) or "new" (fresh window).
+            target_window: Optional string to match against iTerm2 session names.
+                When provided with layout="auto", workers are spawned in the window
+                whose session name contains this string (case-insensitive). This
+                enables spawning workers in a specific project's window — e.g.,
+                target_window="sieve" places workers in the sieve-calendar window.
+                Ignored when layout="new" or when using tmux backend.
 
         Returns:
             Dict with:
@@ -454,13 +461,15 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                         and session.metadata.get("window_index") == window_index
                     )
 
-                # Prefer the coordinator's window when running inside iTerm2.
+                # Prefer the coordinator's window when running inside iTerm2,
+                # unless target_window is specified (which explicitly targets a
+                # different window).
                 # ITERM_SESSION_ID format is "wXtYpZ:UUID" - extract just the UUID.
                 iterm_session_env = os.environ.get("ITERM_SESSION_ID")
                 coordinator_session_id = None
                 if iterm_session_env and ":" in iterm_session_env:
                     coordinator_session_id = iterm_session_env.split(":", 1)[1]
-                if coordinator_session_id and isinstance(backend, ItermBackend):
+                if coordinator_session_id and isinstance(backend, ItermBackend) and target_window is None:
                     coordinator_handle = None
                     for session_handle in await backend.list_sessions():
                         if session_handle.native_id == coordinator_session_id:
@@ -496,6 +505,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                     result = await backend.find_available_window(
                         max_panes=MAX_PANES_PER_TAB,
                         managed_session_ids=managed_session_ids,
+                        target_window=target_window,
                     )
 
                     if result:
