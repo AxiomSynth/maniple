@@ -240,6 +240,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
             logger.warning("Invalid config file; using defaults: %s", exc)
             config = default_config()
         defaults = config.defaults
+        iterm_profile = config.terminal.iterm_profile
 
         # Resolve layout from config if not explicitly provided
         if layout is None:
@@ -548,7 +549,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                                     first_session,
                                     vertical=True,
                                     before=False,
-                                    profile=None,
+                                    profile=iterm_profile,
                                     profile_customizations=profile_customizations[i],
                                 )
                             else:
@@ -560,7 +561,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                                     split_target,
                                     vertical=False,
                                     before=False,
-                                    profile=None,
+                                    profile=iterm_profile,
                                     profile_customizations=profile_customizations[i],
                                 )
                         else:
@@ -571,7 +572,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                                     first_session,
                                     vertical=True,
                                     before=False,
-                                    profile=None,
+                                    profile=iterm_profile,
                                     profile_customizations=profile_customizations[i],
                                 )
                             elif local_pane_count == 2:
@@ -580,7 +581,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                                     first_session,
                                     vertical=False,
                                     before=False,
-                                    profile=None,
+                                    profile=iterm_profile,
                                     profile_customizations=profile_customizations[i],
                                 )
                             else:  # local_pane_count == 3
@@ -592,7 +593,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                                     tr_session,
                                     vertical=False,
                                     before=False,
-                                    profile=None,
+                                    profile=iterm_profile,
                                     profile_customizations=profile_customizations[i],
                                 )
 
@@ -627,7 +628,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
 
                     panes = await backend.create_multi_pane_layout(
                         window_layout,
-                        profile=None,
+                        profile=iterm_profile,
                         profile_customizations=customizations_dict,
                     )
 
@@ -658,7 +659,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
 
                 panes = await backend.create_multi_pane_layout(
                     window_layout,
-                    profile=None,
+                    profile=iterm_profile,
                     profile_customizations=customizations_dict,
                 )
 

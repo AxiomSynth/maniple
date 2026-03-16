@@ -53,6 +53,7 @@ class TerminalConfig:
     """Terminal backend configuration."""
 
     backend: TerminalBackend | None = None  # None = auto-detect
+    iterm_profile: str | None = None  # iTerm2 profile name (None = default)
 
 
 @dataclass
