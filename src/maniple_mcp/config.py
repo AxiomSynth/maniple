@@ -239,7 +239,7 @@ def _parse_defaults(value: object) -> DefaultsConfig:
 def _parse_terminal(value: object) -> TerminalConfig:
     # Parse terminal backend configuration.
     data = _ensure_dict(value, "terminal")
-    _validate_keys(data, {"backend"}, "terminal")
+    _validate_keys(data, {"backend", "iterm_profile"}, "terminal")
     return TerminalConfig(
         backend=_optional_literal(
             data.get("backend"),
@@ -247,6 +247,7 @@ def _parse_terminal(value: object) -> TerminalConfig:
             "terminal.backend",
             None,
         ),
+        iterm_profile=_optional_str(data.get("iterm_profile"), "terminal.iterm_profile"),
     )
 
 
