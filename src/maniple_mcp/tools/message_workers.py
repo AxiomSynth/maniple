@@ -223,13 +223,22 @@ def register_tools(mcp: FastMCP) -> None:
                 registry.update_status(sid, SessionStatus.BUSY)
 
                 # Append tracker-specific hint so workers know how to log progress.
-                tracker_path = (
-                    str(session.main_repo_path)
-                    if session.main_repo_path is not None
-                    else session.project_path
-                )
-                tracker_backend = detect_issue_tracker(tracker_path)
-                message_with_hint = message + build_worker_message_hint(tracker_backend)
+                # Skip if message_hints is disabled in config.
+                from ..config import load_config, default_config, ConfigError
+                try:
+                    _config = load_config()
+                except ConfigError:
+                    _config = default_config()
+                if _config.issue_tracker.message_hints:
+                    tracker_path = (
+                        str(session.main_repo_path)
+                        if session.main_repo_path is not None
+                        else session.project_path
+                    )
+                    tracker_backend = detect_issue_tracker(tracker_path)
+                    message_with_hint = message + build_worker_message_hint(tracker_backend)
+                else:
+                    message_with_hint = message
 
                 # Send the message using agent-specific input handling.
                 # Codex needs a longer pre-Enter delay than Claude.

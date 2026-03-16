@@ -70,6 +70,7 @@ class IssueTrackerConfig:
     """Issue tracker configuration overrides."""
 
     override: IssueTrackerName | None = None
+    message_hints: bool = True  # Append issue tracker hints to worker messages
 
 
 @dataclass
@@ -282,14 +283,18 @@ def _parse_events(value: object) -> EventsConfig:
 def _parse_issue_tracker(value: object) -> IssueTrackerConfig:
     # Parse issue tracker overrides.
     data = _ensure_dict(value, "issue_tracker")
-    _validate_keys(data, {"override"}, "issue_tracker")
+    _validate_keys(data, {"override", "message_hints"}, "issue_tracker")
+    message_hints = data.get("message_hints", True)
+    if not isinstance(message_hints, bool):
+        raise ConfigError("issue_tracker.message_hints must be a boolean")
     return IssueTrackerConfig(
         override=_optional_literal(
             data.get("override"),
             {"beads", "pebbles"},
             "issue_tracker.override",
             None,
-        )
+        ),
+        message_hints=message_hints,
     )
 
 
