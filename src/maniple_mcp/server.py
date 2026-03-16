@@ -299,7 +299,25 @@ async def app_lifespan(
                 report.skipped,
                 report.closed,
             )
-            # Prune stale recovered sessions (tmux panes that no longer exist).
+            # Reconnect recovered sessions to live terminal panes.
+            # This must run BEFORE pruning — promoted sessions move to _sessions
+            # and won't be re-examined by the pruner.
+            try:
+                reconnect_report = await ctx.registry.reconnect_recovered_sessions(ctx.terminal_backend)
+                if reconnect_report.reconnected or reconnect_report.closed:
+                    logger.info(
+                        "Reconnected recovered sessions: reconnected=%d closed=%d skipped=%d",
+                        reconnect_report.reconnected,
+                        reconnect_report.closed,
+                        reconnect_report.skipped,
+                    )
+                if reconnect_report.errors:
+                    for err in reconnect_report.errors:
+                        logger.warning("Reconnect error: %s", err)
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Failed to reconnect recovered sessions: %s", exc)
+
+            # Prune stale recovered sessions (terminal panes that no longer exist).
             try:
                 prune_report = await ctx.registry.prune_stale_recovered_sessions(ctx.terminal_backend)
                 if prune_report.pruned:

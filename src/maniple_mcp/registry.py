@@ -117,6 +117,28 @@ class PruneReport:
 
 
 @dataclass(frozen=True)
+class ReconnectReport:
+    """
+    Report from SessionRegistry.reconnect_recovered_sessions().
+
+    Attributes:
+        reconnected: Number of recovered sessions promoted to live ManagedSession
+        closed: Number of recovered sessions marked closed (no live terminal pane)
+        skipped: Number of sessions skipped (already live, already closed, or no terminal_id)
+        timestamp: When reconnection occurred
+        session_ids: Tuple of session IDs that were successfully reconnected
+        errors: Any non-fatal errors encountered
+    """
+
+    reconnected: int
+    closed: int
+    skipped: int
+    timestamp: datetime
+    session_ids: tuple[str, ...]
+    errors: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class RecoveredSession:
     """
     Represents a session recovered from the event log.
@@ -542,6 +564,34 @@ class SessionRegistry:
         # 3. Try name (last resort)
         return self.get_by_name(identifier)
 
+    def resolve_any(self, identifier: str) -> Optional[AnySession]:
+        """
+        Resolve a session by any known identifier, including recovered sessions.
+
+        Like resolve(), but also searches _recovered_sessions as a fallback.
+        Callers should check isinstance(result, RecoveredSession) to handle
+        the case where a session exists but cannot be controlled.
+
+        Args:
+            identifier: Any session identifier (internal ID, terminal ID, or name)
+
+        Returns:
+            ManagedSession or RecoveredSession if found, None otherwise
+        """
+        live = self.resolve(identifier)
+        if live is not None:
+            return live
+        # Try recovered sessions by ID
+        if identifier in self._recovered_sessions:
+            return self._recovered_sessions[identifier]
+        # Try recovered sessions by terminal ID or name
+        for recovered in self._recovered_sessions.values():
+            if recovered.terminal_id and str(recovered.terminal_id) == identifier:
+                return recovered
+            if recovered.name == identifier:
+                return recovered
+        return None
+
     def list_all(self) -> list[AnySession]:
         """
         Get all registered and recovered sessions.
@@ -859,6 +909,150 @@ class SessionRegistry:
             emitted_closed=len(to_emit),
             timestamp=now,
             session_ids=tuple(pruned_ids),
+            errors=tuple(errors),
+        )
+
+    async def reconnect_recovered_sessions(
+        self,
+        backend: TerminalBackend,
+    ) -> ReconnectReport:
+        """
+        Reconnect recovered sessions to live terminal panes.
+
+        After event log recovery, recovered sessions have metadata but no live
+        terminal handle. This method matches recovered sessions to live terminal
+        panes by native_id, promoting matches to full ManagedSession objects
+        that can be operated on (close, message, examine, etc.).
+
+        Sessions with no matching live pane are marked closed.
+
+        Should be called after recover_from_events() and BEFORE
+        prune_stale_recovered_sessions() in the startup sequence.
+
+        Args:
+            backend: Terminal backend for listing live sessions
+
+        Returns:
+            ReconnectReport with counts of reconnected, closed, and skipped sessions
+        """
+        import logging
+
+        logger = logging.getLogger("maniple.registry")
+        now = datetime.now(timezone.utc)
+
+        if backend.backend_id not in ("iterm", "tmux"):
+            return ReconnectReport(
+                reconnected=0, closed=0, skipped=0,
+                timestamp=now, session_ids=(),
+            )
+
+        errors: list[str] = []
+
+        # Get all live terminal panes
+        live_by_native_id: dict[str, TerminalSession] = {}
+        try:
+            live_sessions = await backend.list_sessions()
+            live_by_native_id = {s.native_id: s for s in live_sessions}
+        except Exception as exc:
+            errors.append(f"{backend.backend_id} list_sessions failed: {exc}")
+            return ReconnectReport(
+                reconnected=0, closed=0, skipped=0,
+                timestamp=now, session_ids=(), errors=tuple(errors),
+            )
+
+        reconnected_ids: list[str] = []
+        to_close: list[str] = []
+        skipped = 0
+
+        for session_id, recovered in list(self._recovered_sessions.items()):
+            # Skip if already promoted to live
+            if session_id in self._sessions:
+                skipped += 1
+                continue
+            # Skip if already known closed
+            if recovered.event_state == "closed":
+                skipped += 1
+                continue
+
+            terminal_id = recovered.terminal_id
+            if terminal_id is None or terminal_id.backend_id != backend.backend_id:
+                skipped += 1
+                continue
+
+            live_ts = live_by_native_id.get(terminal_id.native_id)
+
+            if live_ts is not None:
+                # Promote to ManagedSession with live terminal handle
+                try:
+                    managed = self.add(
+                        terminal_session=live_ts,
+                        project_path=recovered.project_path,
+                        name=recovered.name,
+                        session_id=session_id,
+                    )
+                    managed.agent_type = recovered.agent_type
+                    managed.claude_session_id = recovered.claude_session_id
+                    managed.coordinator_badge = recovered.coordinator_badge
+                    managed.worktree_path = (
+                        Path(recovered.worktree_path) if recovered.worktree_path else None
+                    )
+                    managed.main_repo_path = (
+                        Path(recovered.main_repo_path) if recovered.main_repo_path else None
+                    )
+                    managed.created_at = recovered.created_at
+                    managed.last_activity = recovered.last_activity
+                    managed.status = recovered.status
+                    if recovered.agent_type == "codex" and recovered.codex_jsonl_path:
+                        managed.codex_jsonl_path = Path(recovered.codex_jsonl_path)
+                    reconnected_ids.append(session_id)
+                    logger.info(
+                        "Reconnected recovered session %s (%s) to live terminal %s",
+                        session_id, recovered.name, terminal_id.native_id,
+                    )
+                except Exception as exc:
+                    errors.append(f"Failed to promote {session_id}: {exc}")
+            else:
+                to_close.append(session_id)
+
+        # Emit worker_closed events for sessions with no live pane
+        if to_close:
+            from maniple.events import WorkerEvent as _WorkerEvent, append_events
+
+            to_emit: list[_WorkerEvent] = []
+            ts_str = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+            for session_id in to_close:
+                recovered = self._recovered_sessions[session_id]
+                payload = recovered.to_dict()
+                payload.update({
+                    "reason": "terminal_gone",
+                    "state": "closed",
+                    "previous_state": recovered.event_state,
+                })
+                to_emit.append(_WorkerEvent(
+                    ts=ts_str,
+                    type="worker_closed",
+                    worker_id=session_id,
+                    data=payload,
+                ))
+                self._recovered_sessions[session_id] = replace(
+                    recovered,
+                    event_state="closed",
+                    status=RecoveredSession.map_event_state_to_status("closed"),
+                    last_event_ts=now,
+                )
+
+            try:
+                append_events(to_emit)
+            except Exception as exc:
+                errors.append(f"append_events failed: {exc}")
+
+        return ReconnectReport(
+            reconnected=len(reconnected_ids),
+            closed=len(to_close),
+            skipped=skipped,
+            timestamp=now,
+            session_ids=tuple(reconnected_ids),
             errors=tuple(errors),
         )
 
