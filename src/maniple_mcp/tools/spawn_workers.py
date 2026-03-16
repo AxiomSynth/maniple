@@ -425,8 +425,10 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                     )
                     customization.set_badge_text(badge_text)
 
-                    # Apply current appearance mode colors
-                    await apply_appearance_colors(customization, backend.connection)
+                    # Apply appearance mode colors only if no custom profile
+                    # (custom profiles already have their own color scheme)
+                    if not iterm_profile:
+                        await apply_appearance_colors(customization, backend.connection)
 
                     profile_customizations.append(customization)
 
