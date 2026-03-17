@@ -639,6 +639,7 @@ async def start_agent_in_session(
     stop_hook_marker_id: Optional[str] = None,
     output_capture_path: Optional[str] = None,
     plugin_dir: Optional[str | list[str]] = None,
+    session_name: Optional[str] = None,
 ) -> None:
     """
     Start an agent CLI in an existing iTerm2 session.
@@ -682,6 +683,7 @@ async def start_agent_in_session(
         dangerously_skip_permissions=dangerously_skip_permissions,
         settings_file=settings_file,
         plugin_dir=plugin_dir,
+        session_name=session_name,
         env_vars=env,
     )
 

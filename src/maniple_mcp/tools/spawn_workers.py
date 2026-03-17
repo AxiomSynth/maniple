@@ -706,6 +706,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                     env=env,
                     stop_hook_marker_id=stop_hook_marker_id,
                     plugin_dir=plugin_dir,
+                    session_name=resolved_names[index],
                 )
 
             await asyncio.gather(*[start_agent_for_worker(i) for i in range(worker_count)])

@@ -84,6 +84,7 @@ class ClaudeCLI(AgentCLI):
         dangerously_skip_permissions: bool = False,
         settings_file: str | None = None,
         plugin_dir: str | list[str] | None = None,
+        session_name: str | None = None,
     ) -> list[str]:
         """
         Build Claude CLI arguments.
@@ -92,6 +93,7 @@ class ClaudeCLI(AgentCLI):
             dangerously_skip_permissions: Add --dangerously-skip-permissions
             settings_file: Path to settings JSON for Stop hook injection
             plugin_dir: Path(s) to plugin directory for --plugin-dir (single string or list)
+            session_name: Optional session display name (--name flag, requires Claude Code 2.1.76+)
 
         Returns:
             List of CLI arguments
@@ -100,6 +102,10 @@ class ClaudeCLI(AgentCLI):
 
         if dangerously_skip_permissions:
             args.append("--dangerously-skip-permissions")
+
+        if session_name:
+            args.append("--name")
+            args.append(session_name)
         
         if plugin_dir:
             # Support both single string and list of strings

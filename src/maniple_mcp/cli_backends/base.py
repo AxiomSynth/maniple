@@ -104,6 +104,7 @@ class AgentCLI(Protocol):
         dangerously_skip_permissions: bool = False,
         settings_file: str | None = None,
         plugin_dir: str | list[str] | None = None,
+        session_name: str | None = None,
         env_vars: dict[str, str] | None = None,
     ) -> str:
         """
@@ -116,6 +117,7 @@ class AgentCLI(Protocol):
             dangerously_skip_permissions: Skip permission prompts
             settings_file: Settings file for hook injection
             plugin_dir: Optional path(s) to plugin directory (single string or list)
+            session_name: Optional session display name (--name flag)
             env_vars: Environment variables to prepend
 
         Returns:
@@ -126,6 +128,7 @@ class AgentCLI(Protocol):
             dangerously_skip_permissions=dangerously_skip_permissions,
             settings_file=settings_file if self.supports_settings_file() else None,
             plugin_dir=plugin_dir,
+            session_name=session_name,
         )
 
         if args:
