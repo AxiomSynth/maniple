@@ -694,10 +694,17 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
 
                 cli = get_cli_backend(agent_type)
                 stop_hook_marker_id = marker_id if agent_type == "claude" else None
-                # Use config default when not explicitly set
+                # Config default is the ceiling — callers cannot escalate above it.
+                # If config says skip_permissions=false, callers can't set true.
                 skip_permissions = worker_config.get("skip_permissions")
                 if skip_permissions is None:
                     skip_permissions = defaults.skip_permissions
+                elif skip_permissions and not defaults.skip_permissions:
+                    logger.warning(
+                        "Ignoring skip_permissions=true for %s (blocked by config default)",
+                        resolved_names[index],
+                    )
+                    skip_permissions = False
                 plugin_dir = worker_config.get("plugin_dir")
                 resume_session = worker_config.get("resume")
                 await backend.start_agent_in_session(
