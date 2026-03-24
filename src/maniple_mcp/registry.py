@@ -256,8 +256,8 @@ class ManagedSession:
     claude_session_id: Optional[str] = None  # Discovered from JSONL
     name: Optional[str] = None  # Optional friendly name
     status: SessionStatus = SessionStatus.SPAWNING
-    created_at: datetime = field(default_factory=datetime.now)
-    last_activity: datetime = field(default_factory=datetime.now)
+    created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
+    last_activity: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
     # Coordinator badge and worktree tracking
     coordinator_badge: Optional[str] = None  # Notes from coordinator about assignment
@@ -309,7 +309,7 @@ class ManagedSession:
 
     def update_activity(self) -> None:
         """Update the last_activity timestamp."""
-        self.last_activity = datetime.now()
+        self.last_activity = datetime.now(timezone.utc)
 
     def discover_claude_session_by_marker(self, max_age_seconds: int = 120) -> Optional[str]:
         """
@@ -377,7 +377,12 @@ class ManagedSession:
                     import time
                     try:
                         file_age = time.time() - cached_path.stat().st_mtime
-                        session_age = (datetime.now() - self.last_activity).total_seconds()
+                        # Use timezone-aware now to match last_activity which may be UTC
+                        now = datetime.now(timezone.utc)
+                        activity = self.last_activity
+                        if activity.tzinfo is None:
+                            activity = activity.replace(tzinfo=timezone.utc)
+                        session_age = (now - activity).total_seconds()
                         # If file is stale (>5 min old) but session was active recently (<5 min),
                         # the cached JSONL is likely from a previous session. Re-discover.
                         if file_age > 300 and session_age < 300:
