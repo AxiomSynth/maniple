@@ -797,7 +797,9 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
             workers_awaiting_task: list[str] = []  # Workers with no issue_id and no prompt
             for i, managed in enumerate(managed_sessions):
                 worker_config = workers[i]
-                skip_worker_prompt = worker_config.get("skip_worker_prompt", False)
+                skip_worker_prompt = worker_config.get("skip_worker_prompt")
+                if skip_worker_prompt is None:
+                    skip_worker_prompt = defaults.skip_worker_prompt
                 issue_id = worker_config.get("issue_id")
                 custom_prompt = worker_config.get("prompt")
                 use_worktree = i in worktree_paths

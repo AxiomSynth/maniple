@@ -44,6 +44,7 @@ class DefaultsConfig:
 
     agent_type: AgentType = "claude"
     skip_permissions: bool = False
+    skip_worker_prompt: bool = True  # Skip THE DEAL prompt; use SessionStart hooks instead
     use_worktree: bool = True
     layout: LayoutMode = "auto"
 
@@ -208,7 +209,7 @@ def _parse_defaults(value: object) -> DefaultsConfig:
     data = _ensure_dict(value, "defaults")
     _validate_keys(
         data,
-        {"agent_type", "skip_permissions", "use_worktree", "layout"},
+        {"agent_type", "skip_permissions", "skip_worker_prompt", "use_worktree", "layout"},
         "defaults",
     )
     return DefaultsConfig(
@@ -222,6 +223,11 @@ def _parse_defaults(value: object) -> DefaultsConfig:
             data.get("skip_permissions"),
             "defaults.skip_permissions",
             DefaultsConfig.skip_permissions,
+        ),
+        skip_worker_prompt=_optional_bool(
+            data.get("skip_worker_prompt"),
+            "defaults.skip_worker_prompt",
+            DefaultsConfig.skip_worker_prompt,
         ),
         use_worktree=_optional_bool(
             data.get("use_worktree"),
