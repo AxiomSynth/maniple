@@ -667,16 +667,18 @@ class TmuxBackend(TerminalBackend):
         return match.group(0)
 
     # Build the final tmux window name for a worker.
+    # This also becomes the iTerm title bar via set-titles-string "#W".
     def _format_window_name(
         self,
         name: str,
         project_name: str | None,
         issue_id: str | None,
     ) -> str:
-        window_name = f"{name} | {project_name}" if project_name else name
-        if issue_id:
-            return f"{window_name} [{issue_id}]"
-        return window_name
+        if project_name and issue_id:
+            return f"{project_name} — {name} [{issue_id}]"
+        if project_name:
+            return f"{project_name} — {name}"
+        return name
 
     # Generate a default tmux window name.
     def _generate_window_name(self) -> str:
