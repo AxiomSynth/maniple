@@ -142,7 +142,12 @@ class TmuxBackend(TerminalBackend):
         profile: str | None = None,
         profile_customizations: Any | None = None,
     ) -> TerminalSession:
-        """Create a worker window in a per-project tmux session."""
+        """Create a worker in its own tmux session.
+
+        Each named worker gets a dedicated tmux session (``maniple-{name}``),
+        so it can be attached in its own iTerm window/tab independently.
+        Unnamed workers fall back to a shared per-project session.
+        """
         if profile or profile_customizations:
             raise ValueError("tmux backend does not support profiles")
 
@@ -150,23 +155,35 @@ class TmuxBackend(TerminalBackend):
         project_name = project_name_from_path(project_path)
         resolved_issue_id = self._resolve_issue_id(issue_id, coordinator_badge)
         window_name = self._format_window_name(base_name, project_name, resolved_issue_id)
-        session_name = tmux_session_name_for_project(project_path)
+        # Named workers get their own tmux session so each can have an
+        # independent iTerm window.  Unnamed workers share a per-project session.
+        if name:
+            session_name = f"{TMUX_SESSION_PREFIXED}{_tmux_safe_slug(name)}"
+        else:
+            session_name = tmux_session_name_for_project(project_path)
 
-        # Ensure the dedicated session exists, then create a new window for this worker.
+        # Named workers always get a fresh session.  If a stale session with
+        # the same name exists (leftover from a prior spawn), kill it first.
+        # Unnamed workers add windows to a shared per-project session.
         try:
             await self._run_tmux(["has-session", "-t", session_name])
-            output = await self._run_tmux(
-                [
-                    "new-window",
-                    "-t",
-                    session_name,
-                    "-n",
-                    window_name,
-                    "-P",
-                    "-F",
-                    "#{pane_id}\t#{window_id}\t#{window_index}",
-                ]
-            )
+            if name:
+                # Stale session — kill it so we can create a clean one.
+                await self._run_tmux(["kill-session", "-t", session_name])
+                raise subprocess.CalledProcessError(1, "has-session")  # fall through to new-session
+            else:
+                output = await self._run_tmux(
+                    [
+                        "new-window",
+                        "-t",
+                        session_name,
+                        "-n",
+                        window_name,
+                        "-P",
+                        "-F",
+                        "#{pane_id}\t#{window_id}\t#{window_index}",
+                    ]
+                )
         except subprocess.CalledProcessError:
             output = await self._run_tmux(
                 [
