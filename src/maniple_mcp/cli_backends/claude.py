@@ -108,8 +108,10 @@ class ClaudeCLI(AgentCLI):
         if resume_session:
             args.append("--resume")
             args.append(resume_session)
-        elif session_name:
-            # Only use --name when not resuming (--resume already targets a named session)
+
+        # Always pass --name so the TUI badge shows the session identity,
+        # even on resumed sessions where the badge would otherwise be blank.
+        if session_name:
             args.append("--name")
             args.append(session_name)
         
