@@ -176,7 +176,11 @@ async def _wait_for_message_flush(
             try:
                 current_mtime = jsonl_path.stat().st_mtime
                 if current_mtime > mtimes_before[sid]:
-                    # JSONL was updated — message has been flushed
+                    # JSONL mtime changed — content is being written.
+                    # Brief settle delay: mtime updates when write starts, but
+                    # the stop_hook_summary entry may still be mid-write. Allow
+                    # Claude Code to finish flushing before idle polling begins.
+                    await asyncio.sleep(0.2)
                     return
             except OSError:
                 continue
