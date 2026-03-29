@@ -678,36 +678,51 @@ class SessionRegistry:
                 return session
         return None
 
-    def resolve(self, identifier: str) -> Optional[ManagedSession]:
+    def resolve(self, identifier: str) -> Optional[ManagedSession | RecoveredSession]:
         """
         Resolve a session by any known identifier.
 
-        Lookup order (most specific first):
-        1. Internal session_id (e.g., "d875b833")
-        2. Terminal ID with backend prefix (e.g., "iterm:DB29DB03-..."),
-           or a bare iTerm ID for backwards compatibility
-        3. Session name
+        Searches both managed sessions (live) and recovered sessions (from event
+        log / registry persistence). Managed sessions take priority.
 
-        After MCP restart, internal IDs are lost until import. This method
-        allows tools to accept terminal IDs directly for recovery scenarios.
+        Lookup order (most specific first):
+        1. Internal session_id in managed sessions
+        2. Terminal ID in managed sessions
+        3. Name in managed sessions
+        4. Internal session_id in recovered sessions
+        5. Name in recovered sessions
 
         Args:
             identifier: Any session identifier (internal ID, terminal ID, or name)
 
         Returns:
-            ManagedSession if found, None otherwise
+            ManagedSession or RecoveredSession if found, None otherwise.
+            Callers that need terminal access should check isinstance(result, ManagedSession).
         """
-        # 1. Try internal session_id (fast dict lookup)
+        # 1. Try internal session_id in managed (fast dict lookup)
         if identifier in self._sessions:
             return self._sessions[identifier]
 
-        # 2. Try terminal ID (e.g., "iterm:UUID")
+        # 2. Try terminal ID in managed (e.g., "iterm:UUID")
         for session in self._sessions.values():
             if session.terminal_id and str(session.terminal_id) == identifier:
                 return session
 
-        # 3. Try name (last resort)
-        return self.get_by_name(identifier)
+        # 3. Try name in managed
+        managed = self.get_by_name(identifier)
+        if managed:
+            return managed
+
+        # 4. Try internal session_id in recovered
+        if identifier in self._recovered_sessions:
+            return self._recovered_sessions[identifier]
+
+        # 5. Try name in recovered
+        for session in self._recovered_sessions.values():
+            if session.name == identifier:
+                return session
+
+        return None
 
     def resolve_any(self, identifier: str) -> Optional[AnySession]:
         """
