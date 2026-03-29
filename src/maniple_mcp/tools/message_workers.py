@@ -281,6 +281,20 @@ def register_tools(mcp: FastMCP) -> None:
         async def send_to_session(sid: str, session) -> tuple[str, dict]:
             """Send message to a single session. Returns tuple of (session_id, result_dict)."""
             try:
+                # Wait for the worker to be idle before sending.
+                # If the worker is mid-output, send-keys text gets buffered/lost.
+                # Short timeout (10s) — if still busy, send anyway (may be waiting for input).
+                if not session.is_idle():
+                    logger.debug("Session %s not idle — waiting up to 10s before send", sid)
+                    idle_wait = await _wait_for_sessions_idle(
+                        sessions=[(sid, session)],
+                        mode="all",
+                        timeout=10.0,
+                        poll_interval=1.0,
+                    )
+                    if idle_wait.get("timed_out"):
+                        logger.debug("Session %s still busy after 10s — sending anyway", sid)
+
                 # Update status to busy
                 registry.update_status(sid, SessionStatus.BUSY)
 
