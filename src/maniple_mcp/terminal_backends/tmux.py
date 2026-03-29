@@ -398,9 +398,29 @@ class TmuxBackend(TerminalBackend):
             pass  # Best effort — session still works via manual attach
 
     async def send_text(self, session: TerminalSession, text: str) -> None:
-        """Send raw text to a tmux pane."""
+        """Send raw text to a tmux pane.
+
+        For multi-line text, uses load-buffer + paste-buffer which is more
+        reliable than send-keys -l for long content. The -p flag on
+        paste-buffer omits the trailing newline so Enter can be sent separately.
+        """
         pane_id = self.unwrap_session(session)
-        await self._run_tmux(["send-keys", "-t", pane_id, "-l", text])
+        if "\n" in text:
+            buf_name = f"maniple-{uuid.uuid4().hex[:8]}"
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "load-buffer", "-b", buf_name, "-",
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await proc.communicate(input=text.encode("utf-8"))
+            await self._run_tmux(["paste-buffer", "-b", buf_name, "-t", pane_id, "-p"])
+            try:
+                await self._run_tmux(["delete-buffer", "-b", buf_name])
+            except subprocess.CalledProcessError:
+                pass
+        else:
+            await self._run_tmux(["send-keys", "-t", pane_id, "-l", text])
 
     async def send_key(self, session: TerminalSession, key: str) -> None:
         """Send a special key to a tmux pane."""
