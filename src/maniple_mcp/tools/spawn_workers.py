@@ -791,19 +791,34 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                 )
 
             # Wait for markers to appear in JSONL (Claude and Codex)
+            # If marker isn't found, retry Enter (send-keys race: text delivered
+            # but Enter didn't submit — DEV-27).
             for i, managed in enumerate(managed_sessions):
                 if managed.agent_type == "claude":
                     claude_session_id = await await_marker_in_jsonl(
                         managed.project_path,
                         managed.session_id,
-                        timeout=30.0,
+                        timeout=15.0,
                         poll_interval=0.1,
                     )
+                    if not claude_session_id:
+                        # Retry: send Enter again in case the first one didn't submit
+                        logger.info(
+                            "Marker not found for %s after 15s — retrying Enter",
+                            managed.session_id,
+                        )
+                        await backend.send_key(pane_sessions[i], "enter")
+                        claude_session_id = await await_marker_in_jsonl(
+                            managed.project_path,
+                            managed.session_id,
+                            timeout=15.0,
+                            poll_interval=0.1,
+                        )
                     if claude_session_id:
                         managed.claude_session_id = claude_session_id
                     else:
                         logger.warning(
-                            f"Marker polling timed out for {managed.session_id}, "
+                            f"Marker polling timed out for {managed.session_id} after retry, "
                             "JSONL correlation unavailable"
                         )
                 elif managed.agent_type == "codex":
