@@ -212,7 +212,7 @@ class TmuxBackend(TerminalBackend):
         # Use issue_id prefix to determine project grouping for iTerm windows.
         # This ensures DEV-26 workers in ~/cognitive-cache still group under
         # the dev-ops window with the dev-reviewer.
-        if name and "nexus" not in name.lower():
+        if name:
             window_group = project_name
             if resolved_issue_id:
                 prefix = resolved_issue_id.split("-")[0].lower() if "-" in resolved_issue_id else None
