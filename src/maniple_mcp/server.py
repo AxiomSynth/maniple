@@ -336,6 +336,18 @@ async def app_lifespan(
                     )
             except Exception as exc:  # pragma: no cover - defensive
                 logger.warning("Failed to prune stale recovered sessions: %s", exc)
+
+            # Also prune managed sessions with dead panes (from prior runs).
+            try:
+                managed_pruned = await ctx.registry.prune_stale_managed_sessions(ctx.terminal_backend)
+                if managed_pruned:
+                    logger.info(
+                        "Pruned stale managed sessions: %d removed (%s)",
+                        len(managed_pruned),
+                        ", ".join(managed_pruned),
+                    )
+            except Exception as exc:  # pragma: no cover - defensive
+                logger.warning("Failed to prune stale managed sessions: %s", exc)
         else:
             logger.info("No event log data available for recovery")
 

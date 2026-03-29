@@ -301,7 +301,7 @@ wheels = [
 
 [[package]]
 name = "maniple-mcp"
-version = "0.13.0"
+version = "0.14.0.dev1"
 source = { editable = "." }
 dependencies = [
     { name = "iterm2" },

@@ -27,36 +27,44 @@ def register_tools(mcp: FastMCP) -> None:
         ctx: Context[ServerSession, "AppContext"],
     ) -> dict:
         """
-        Prune stale recovered worker sessions.
+        Prune stale worker sessions — both recovered and managed.
 
-        This is a safety valve for "ghost" recovered sessions (source=event_log)
-        that show as active even though their underlying terminal pane no longer
-        exists (common after crashes or manual tmux cleanup).
+        Checks ALL sessions (not just recovered) for terminal pane liveness:
+        - Recovered sessions (source=event_log): emits worker_closed events
+        - Managed sessions (source=registry): removes from registry directly
 
-        On tmux backend, this:
-        - checks whether recovered tmux panes still exist
-        - emits worker_closed(reason=stale_recovered) for stale recovered sessions
-        - updates the in-memory recovered state to event_state=closed
+        Common after crashes, manual tmux cleanup, or repeated /nexus:boot.
 
         Returns:
             Dict with:
-                - pruned: number of sessions pruned
-                - emitted_closed: number of worker_closed events emitted
-                - session_ids: list of pruned session IDs
+                - pruned: total sessions pruned (recovered + managed)
+                - pruned_recovered: recovered sessions pruned
+                - pruned_managed: managed sessions with dead panes removed
+                - emitted_closed: worker_closed events emitted (recovered only)
+                - session_ids: list of all pruned session IDs
                 - errors: list of non-fatal errors encountered
         """
         app_ctx = ctx.request_context.lifespan_context
         registry = app_ctx.registry
         backend = app_ctx.terminal_backend
 
+        # Prune managed sessions with dead panes
+        managed_pruned = await registry.prune_stale_managed_sessions(backend)
+        if managed_pruned:
+            logger.info("Pruned %d stale managed sessions: %s", len(managed_pruned), managed_pruned)
+
+        # Prune recovered sessions with dead panes
         report = await registry.prune_stale_recovered_sessions(backend)
         if report.errors:
             logger.warning("prune_recovered_workers encountered errors: %s", report.errors)
 
+        all_pruned = list(report.session_ids) + managed_pruned
         return {
-            "pruned": report.pruned,
+            "pruned": report.pruned + len(managed_pruned),
+            "pruned_recovered": report.pruned,
+            "pruned_managed": len(managed_pruned),
             "emitted_closed": report.emitted_closed,
-            "session_ids": list(report.session_ids),
+            "session_ids": all_pruned,
             "errors": list(report.errors),
         }
 

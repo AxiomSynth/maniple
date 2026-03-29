@@ -940,6 +940,45 @@ class SessionRegistry:
             timestamp=now,
         )
 
+    async def prune_stale_managed_sessions(
+        self,
+        backend: TerminalBackend,
+    ) -> list[str]:
+        """
+        Remove managed sessions whose tmux pane no longer exists.
+
+        Unlike recovered sessions (which get worker_closed events), managed sessions
+        are simply removed from the registry — they were live sessions that died
+        without going through close_workers (e.g., manual tmux kill, crash).
+
+        Returns list of pruned session IDs.
+        """
+        if backend.backend_id not in ("tmux", "iterm"):
+            return []
+
+        try:
+            sessions = await backend.list_sessions()
+            live_pane_ids = {sess.native_id for sess in sessions}
+        except Exception:
+            return []  # Can't check — don't prune
+
+        pruned = []
+        for sid, session in list(self._sessions.items()):
+            terminal_id = session.terminal_id
+            if terminal_id is None:
+                continue
+            if terminal_id.backend_id != backend.backend_id:
+                continue
+            if terminal_id.native_id not in live_pane_ids:
+                logger.info("Pruning stale managed session %s (%s) — pane gone", sid, session.name)
+                del self._sessions[sid]
+                pruned.append(sid)
+
+        if pruned:
+            self._persist()
+
+        return pruned
+
     async def prune_stale_recovered_sessions(
         self,
         backend: TerminalBackend,
