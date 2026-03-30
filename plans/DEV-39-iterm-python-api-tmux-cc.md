@@ -118,29 +118,30 @@ Moved before ItermManager because -CC behavior depends on these settings.
 - [x] Update tmux config: `aggressive-resize off` (→ `~/.tmux.conf`)
 - [x] Update tmux config: `history-limit 50000`, `mouse on`, `terminal-overrides RGB`
 - [x] Document global vs per-session scope for each option
-- [ ] Commit: `DEV-39: Document iTerm2 and tmux configuration for -CC mode`
+- [x] Commit: `DEV-39: Document iTerm2 and tmux configuration for -CC mode` (e47c01f)
 
 ### Phase 2: ItermManager module
 
 Phase 2 is all-new code with heavy iTerm2 API mocking. Strict red-green TDD for 11 tests would be slower than building the module from spike learnings, then writing tests against the real API surface. Approach: **implement core methods first (informed by spike), then write tests against the implementation.** This is justified because the spike already validates the behavioral assumptions — the tests verify the module wiring, not the assumptions.
 
 #### Core tests (write alongside implementation)
-- [ ] `test_ensure_connected_lazy_init` — mock Connection.async_create, verify called on first use
-- [ ] `test_ensure_connected_refreshes_stale` — mock stale connection, verify refresh
-- [ ] `test_api_unavailable_logs_warning` — connection fails, logs warning, returns without error
-- [ ] `test_bootstrap_builds_cc_attach_command` — verify constructed command includes `tmux -CC attach`
-- [ ] `test_find_window_traverses_api` — mock app.terminal_windows, verify traversal
+- [x] `test_ensure_connected_lazy_init` — mock Connection.async_create, verify called on first use
+- [x] `test_ensure_connected_refreshes_stale` — mock stale connection, verify refresh
+- [x] `test_api_unavailable_logs_warning` — connection fails, logs warning, returns without error
+- [x] `test_bootstrap_builds_cc_attach_command` — verify constructed command includes `tmux -CC attach`
+- [x] `test_find_window_traverses_api` — mock app.terminal_windows, verify traversal
 
 #### Persistence and integration tests (write after core is working)
-- [ ] `test_window_ids_persisted` — verify read/write to iterm-windows.json
-- [ ] `test_stale_window_ids_invalidated` — verify old AppleScript-era IDs are re-validated via Python API on first use
-- [ ] `test_open_session_new_window` — no existing window, creates new
-- [ ] `test_open_session_existing_window` — cached window ID, creates tab
-- [ ] `test_set_tab_color` — verify LocalWriteOnlyProfile color application
-- [ ] `test_set_tab_title_and_badge` — verify tab title and badge text
+- [x] `test_window_ids_persisted` — verify read/write to iterm-windows.json
+- [x] `test_stale_window_ids_invalidated` — verify old AppleScript-era IDs are re-validated via Python API on first use
+- [x] `test_bootstrap_uses_existing_window` — cached window ID, creates tab in existing window
+- [x] `test_open_session_best_effort_when_api_down` — API unavailable, returns silently
+- [x] `test_close_session_closes_gateway` — gateway tab closed on close_session
+- [x] `test_close_session_handles_missing_gateway` — no error when gateway already gone
+- [x] `test_find_window_returns_none_for_unknown_project` — no match returns None
 
 #### Implementation
-- [ ] Create `src/maniple_mcp/iterm_manager.py` with `ItermManager` class:
+- [x] Create `src/maniple_mcp/iterm_manager.py` with `ItermManager` class:
   - `__init__()` — initialize empty connection/app state, load persisted window IDs, init gateway tracking dict
   - `async ensure_connected() -> App | None` — lazy-init via `Connection.async_create()` (spike-validated: works from existing asyncio loop). On failure: log warning, return None.
   - `async open_session(tmux_session: str, project: str | None) -> None` — find/create iTerm window, bootstrap -CC via Python API (`window.async_create_tab()` + `session.async_send_text()`), discover TmuxConnection via `iterm2.async_get_tmux_connections(conn)`, track gateway session ID. Best-effort: returns silently if API unavailable.
