@@ -1,6 +1,8 @@
 """Tests for the tmux terminal backend."""
 
+import inspect
 import subprocess
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -257,3 +259,45 @@ def test_tmux_session_name_fallback_for_none():
     """Test that None project path produces fallback session name."""
     session = tmux_session_name_for_project(None)
     assert session == "maniple-project"
+
+
+@pytest.mark.asyncio
+async def test_create_session_calls_iterm_manager(monkeypatch):
+    """create_session delegates to ItermManager.open_session for named workers."""
+    backend = TmuxBackend()
+    calls = []
+    tmux_calls = []
+
+    async def fake_run(args):
+        tmux_calls.append(args)
+        if args[0] == "has-session":
+            raise subprocess.CalledProcessError(1, "has-session")
+        if args[0] == "new-session":
+            return "%99\t@99\t0"
+        if args[0] == "set-hook":
+            return ""
+        return ""
+
+    async def fake_open_session(tmux_session, project=None):
+        calls.append((tmux_session, project))
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+    monkeypatch.setattr(backend._iterm, "open_session", fake_open_session)
+
+    await backend.create_session(
+        "test-worker",
+        project_path="/Users/test/my-project",
+    )
+
+    # ItermManager.open_session should have been called with the tmux session name
+    assert len(calls) == 1
+    tmux_session_name, project_name = calls[0]
+    assert tmux_session_name.startswith("maniple-")
+    assert project_name == "my-project"
+
+
+def test_no_osascript_in_tmux_backend():
+    """No AppleScript (osascript) references remain in the tmux backend module."""
+    import maniple_mcp.terminal_backends.tmux as tmux_mod
+    source = inspect.getsource(tmux_mod)
+    assert "osascript" not in source, "Found 'osascript' in tmux backend — AppleScript should be fully removed"

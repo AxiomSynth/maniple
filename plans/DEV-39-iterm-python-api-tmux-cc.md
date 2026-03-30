@@ -152,8 +152,8 @@ Phase 2 is all-new code with heavy iTerm2 API mocking. Strict red-green TDD for 
   - `async close_session(tmux_session: str) -> None` — kill-session (server-side), then close gateway tab via Python API
   - `_gateways: dict[str, str]` — maps tmux session name → iTerm gateway session ID
   - `_load_window_ids()` / `_save_window_ids()` — same persistence to `~/.maniple/iterm-windows.json`
-- [ ] All Phase 2 tests pass (green)
-- [ ] Commit: `DEV-39: Add iterm_manager module with Python API + tmux -CC bootstrap`
+- [x] All Phase 2 tests pass (green) — 12/12 pass
+- [x] Commit: `DEV-39: Add iterm_manager module with Python API + tmux -CC bootstrap` (d21f630)
 
 ### Phase 3: Replace AppleScript in TmuxBackend
 
