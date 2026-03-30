@@ -266,14 +266,9 @@ class ItermManager:
             return None
 
         try:
-            if window_id:
-                window = self._find_window_by_id(window_id)
-                if window is not None:
-                    tab = await window.async_create_tab()
-                else:
-                    # Window gone, create new
-                    window = await iterm2.Window.async_create(self._connection)
-                    tab = window.tabs[0]
+            window = self._find_window_by_id(window_id) if window_id else None
+            if window is not None:
+                tab = await window.async_create_tab()
             else:
                 window = await iterm2.Window.async_create(self._connection)
                 tab = window.tabs[0]
@@ -373,9 +368,6 @@ class ItermManager:
         After bootstrap, iTerm creates native tabs for tmux windows.
         Scoped by tmux_connection_id to avoid picking up tabs from other connections.
         """
-        if self._app is None:
-            return None
-
         # Refresh app state to see new tabs
         app = await self.ensure_connected()
         if app is None:
