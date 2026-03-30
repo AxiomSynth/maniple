@@ -360,9 +360,19 @@ class TmuxBackend(TerminalBackend):
         )
 
     async def close_session(self, session: TerminalSession, force: bool = False) -> None:
-        """Close a tmux window (or its pane) for this worker."""
+        """Close a tmux window (or its pane) for this worker.
+
+        For named workers with their own tmux session and a -CC gateway,
+        also cleans up the gateway tab via ItermManager.
+        """
         pane_id = self.unwrap_session(session)
         _ = force
+
+        # Clean up -CC gateway tab for named workers (best-effort)
+        session_name = session.metadata.get("session_name")
+        if session_name:
+            await self._iterm.close_session(session_name)
+
         window_id = session.metadata.get("window_id")
         if not window_id:
             window_id = await self._window_id_for_pane(pane_id)

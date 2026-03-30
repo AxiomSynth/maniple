@@ -296,6 +296,64 @@ async def test_create_session_calls_iterm_manager(monkeypatch):
     assert project_name == "my-project"
 
 
+@pytest.mark.asyncio
+async def test_close_session_cleans_up_gateway(monkeypatch):
+    """close_session calls ItermManager.close_session for gateway cleanup."""
+    backend = TmuxBackend()
+    tmux_calls = []
+    iterm_calls = []
+
+    async def fake_run(args):
+        tmux_calls.append(args)
+        return ""
+
+    async def fake_iterm_close(tmux_session):
+        iterm_calls.append(tmux_session)
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+    monkeypatch.setattr(backend._iterm, "close_session", fake_iterm_close)
+
+    session = TerminalSession(
+        "tmux", "%5", "%5",
+        metadata={"session_name": "maniple-worker", "window_id": "@5"},
+    )
+    await backend.close_session(session)
+
+    # ItermManager.close_session should be called with session name
+    assert iterm_calls == ["maniple-worker"]
+    # tmux kill-window should still be called
+    assert any("kill-window" in c for c in tmux_calls)
+
+
+@pytest.mark.asyncio
+async def test_close_session_skips_iterm_when_no_session_name(monkeypatch):
+    """close_session skips gateway cleanup for sessions without session_name."""
+    backend = TmuxBackend()
+    tmux_calls = []
+    iterm_calls = []
+
+    async def fake_run(args):
+        tmux_calls.append(args)
+        return ""
+
+    async def fake_iterm_close(tmux_session):
+        iterm_calls.append(tmux_session)
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+    monkeypatch.setattr(backend._iterm, "close_session", fake_iterm_close)
+
+    session = TerminalSession(
+        "tmux", "%5", "%5",
+        metadata={"window_id": "@5"},
+    )
+    await backend.close_session(session)
+
+    # No iterm close call (no session_name in metadata)
+    assert iterm_calls == []
+    # tmux kill-window still called
+    assert any("kill-window" in c for c in tmux_calls)
+
+
 def test_no_osascript_in_tmux_backend():
     """No AppleScript (osascript) references remain in the tmux backend module."""
     import maniple_mcp.terminal_backends.tmux as tmux_mod
