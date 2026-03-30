@@ -433,3 +433,37 @@ async def test_open_session_best_effort_when_api_down(monkeypatch, tmp_path):
     mgr = ItermManager()
     # Should not raise
     await mgr.open_session("test-session", project="dev-ops")
+
+
+# ---- Tests: color generation ----
+
+
+def test_generate_tab_color_rgb_distinct():
+    """Golden ratio distribution produces distinct colors for consecutive indices."""
+    from maniple_mcp.iterm_manager import generate_tab_color_rgb
+
+    colors = [generate_tab_color_rgb(i) for i in range(5)]
+
+    # All colors should be valid RGB tuples
+    for r, g, b in colors:
+        assert 0 <= r <= 255
+        assert 0 <= g <= 255
+        assert 0 <= b <= 255
+
+    # Consecutive colors should be visually distinct (different hues)
+    assert len(set(colors)) == 5  # all unique
+
+
+def test_next_color_index_increments(monkeypatch, tmp_path):
+    """next_color_index returns incrementing values."""
+    from maniple_mcp.iterm_manager import ItermManager
+
+    monkeypatch.setattr(
+        "maniple_mcp.iterm_manager.ItermManager._WINDOWS_PATH",
+        tmp_path / "iterm-windows.json",
+    )
+
+    mgr = ItermManager()
+    assert mgr.next_color_index() == 0
+    assert mgr.next_color_index() == 1
+    assert mgr.next_color_index() == 2

@@ -255,7 +255,13 @@ class TmuxBackend(TerminalBackend):
                 prefix_to_project = {"sie": "sieve", "pra": "prakasha", "tre": "trendiculosa", "dev": "dev-ops"}
                 if prefix and prefix in prefix_to_project:
                     window_group = prefix_to_project[prefix]
-            await self._iterm.open_session(session_name, window_group)
+            await self._iterm.open_session(
+                session_name,
+                window_group,
+                tab_title=window_name,
+                tab_badge=coordinator_badge or resolved_issue_id,
+                tab_color_index=self._iterm.next_color_index(),
+            )
 
         # Register pane-exited hook for crash detection.
         # When the process in the pane exits (crash, OOM, manual kill),

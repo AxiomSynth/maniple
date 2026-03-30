@@ -278,8 +278,8 @@ async def test_create_session_calls_iterm_manager(monkeypatch):
             return ""
         return ""
 
-    async def fake_open_session(tmux_session, project=None):
-        calls.append((tmux_session, project))
+    async def fake_open_session(tmux_session, project=None, **kwargs):
+        calls.append((tmux_session, project, kwargs))
 
     monkeypatch.setattr(backend, "_run_tmux", fake_run)
     monkeypatch.setattr(backend._iterm, "open_session", fake_open_session)
@@ -291,9 +291,12 @@ async def test_create_session_calls_iterm_manager(monkeypatch):
 
     # ItermManager.open_session should have been called with the tmux session name
     assert len(calls) == 1
-    tmux_session_name, project_name = calls[0]
+    tmux_session_name, project_name, kwargs = calls[0]
     assert tmux_session_name.startswith("maniple-")
     assert project_name == "my-project"
+    # Should include tab appearance metadata
+    assert "tab_title" in kwargs
+    assert "tab_color_index" in kwargs
 
 
 @pytest.mark.asyncio

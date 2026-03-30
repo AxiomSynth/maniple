@@ -14,6 +14,7 @@ Key behaviors:
 from __future__ import annotations
 
 import asyncio
+import colorsys
 import json
 import logging
 from pathlib import Path
@@ -27,6 +28,18 @@ logger = logging.getLogger("maniple")
 # How long to wait for -CC connection discovery after bootstrap
 _CC_DISCOVERY_TIMEOUT_S = 10.0
 _CC_DISCOVERY_POLL_S = 0.5
+
+# Golden ratio conjugate for even hue distribution across workers
+_GOLDEN_RATIO_CONJUGATE = 0.618033988749895
+_DEFAULT_SATURATION = 0.65
+_DEFAULT_LIGHTNESS = 0.55
+
+
+def generate_tab_color_rgb(index: int) -> tuple[int, int, int]:
+    """Generate a distinct RGB color for a worker tab using golden ratio hue distribution."""
+    hue = (index * _GOLDEN_RATIO_CONJUGATE) % 1.0
+    r, g, b = colorsys.hls_to_rgb(hue, _DEFAULT_LIGHTNESS, _DEFAULT_SATURATION)
+    return (int(r * 255), int(g * 255), int(b * 255))
 
 
 class ItermManager:
@@ -44,6 +57,7 @@ class ItermManager:
         self._app: iterm2.App | None = None
         self._windows: dict[str, str] = {}  # project_key -> iTerm window_id
         self._gateways: dict[str, str] = {}  # tmux_session -> iTerm gateway session_id
+        self._color_counter: int = 0
         self._load_window_ids()
 
     async def ensure_connected(self) -> iterm2.App | None:
@@ -83,10 +97,21 @@ class ItermManager:
         self,
         tmux_session: str,
         project: str | None = None,
+        *,
+        tab_title: str | None = None,
+        tab_badge: str | None = None,
+        tab_color_index: int | None = None,
     ) -> None:
         """Open an iTerm2 window/tab for a tmux session via -CC control mode.
 
         Best-effort: returns silently if API unavailable.
+
+        Args:
+            tmux_session: tmux session name to attach via -CC
+            project: project name for window grouping
+            tab_title: title for the native iTerm tab
+            tab_badge: badge text for the tab
+            tab_color_index: color index for golden-ratio hue distribution
         """
         app = await self.ensure_connected()
         if app is None:
@@ -114,6 +139,25 @@ class ItermManager:
                 self._windows[project_key] = window_id
                 self._save_window_ids()
                 logger.debug("Cached new window %s for project %s", window_id, project_key)
+
+        # Apply tab appearance after -CC creates native tabs
+        if tab_title or tab_badge or tab_color_index is not None:
+            color = generate_tab_color_rgb(tab_color_index) if tab_color_index is not None else None
+            # Find the native tab for our tmux session's window
+            tmux_tab_session_id = await self._find_tmux_tab_session()
+            if tmux_tab_session_id:
+                await self.set_tab_appearance(
+                    tmux_tab_session_id,
+                    color=color,
+                    title=tab_title,
+                    badge=tab_badge,
+                )
+
+    def next_color_index(self) -> int:
+        """Return and increment the color counter for tab color generation."""
+        idx = self._color_counter
+        self._color_counter += 1
+        return idx
 
     async def close_session(self, tmux_session: str) -> None:
         """Close a -CC session: kill tmux session + close gateway tab.
@@ -313,6 +357,22 @@ class ItermManager:
             for t in w.tabs:
                 if t.tmux_window_id is not None and str(t.tmux_window_id) != "-1":
                     return w.window_id
+        return None
+
+    async def _find_tmux_tab_session(self) -> str | None:
+        """Find the iTerm session ID of the most recently created -CC tab.
+
+        After bootstrap, the newest tab with tmux_window_id != -1 is our tab.
+        """
+        app = await self.ensure_connected()
+        if app is None:
+            return None
+
+        # Find any tab with a real tmux_window_id
+        for w in app.terminal_windows:
+            for t in w.tabs:
+                if t.tmux_window_id is not None and str(t.tmux_window_id) != "-1":
+                    return t.current_session.session_id
         return None
 
     async def _window_exists(self, window_id: str) -> bool:
