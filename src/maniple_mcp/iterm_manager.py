@@ -18,7 +18,7 @@ import colorsys
 import json
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     import iterm2
@@ -58,7 +58,8 @@ class ItermManager:
         self._windows: dict[str, str] = {}  # project_key -> iTerm window_id
         self._gateways: dict[str, str] = {}  # tmux_session -> iTerm gateway session_id
         self._color_counter: int = 0
-        self._load_window_ids()
+        self._save_lock = asyncio.Lock()
+        self._load_state()
 
     async def ensure_connected(self) -> iterm2.App | None:
         """Lazy-init and refresh stale iTerm2 Python API connection.
@@ -124,7 +125,7 @@ class ItermManager:
         if window_id and not await self._window_exists(window_id):
             logger.debug("Cached window %s no longer exists, clearing", window_id)
             del self._windows[project_key]
-            self._save_window_ids()
+            self._save_state()
             window_id = None
 
         if not window_id:
@@ -134,21 +135,21 @@ class ItermManager:
             else:
                 logger.info("No existing window found for project %s — creating new", project)
 
-        await self._bootstrap_cc(window_id, tmux_session)
+        connection_id = await self._bootstrap_cc(window_id, tmux_session)
 
         # Discover and cache the window ID if we created a new one
-        if not window_id:
-            window_id = await self._discover_window_for_session(tmux_session)
+        if not window_id and connection_id:
+            window_id = await self._discover_window_for_session(connection_id)
             if window_id:
                 self._windows[project_key] = window_id
-                self._save_window_ids()
+                self._save_state()
                 logger.debug("Cached new window %s for project %s", window_id, project_key)
 
         # Apply tab appearance after -CC creates native tabs
-        if tab_title or tab_badge or tab_color_index is not None:
+        if connection_id and (tab_title or tab_badge or tab_color_index is not None):
             color = generate_tab_color_rgb(tab_color_index) if tab_color_index is not None else None
-            # Find the native tab for our tmux session's window
-            tmux_tab_session_id = await self._find_tmux_tab_session()
+            # Find the native tab for our tmux session's -CC connection
+            tmux_tab_session_id = await self._find_tmux_tab_session(connection_id)
             if tmux_tab_session_id:
                 await self.set_tab_appearance(
                     tmux_tab_session_id,
@@ -173,6 +174,7 @@ class ItermManager:
         gateway_id = self._gateways.pop(tmux_session, None)
         if gateway_id:
             await self._close_session_by_id(gateway_id)
+            await self._save_state_locked()
 
     async def set_tab_appearance(
         self,
@@ -247,18 +249,21 @@ class ItermManager:
         self,
         window_id: str | None,
         tmux_session: str,
-    ) -> None:
+    ) -> str | None:
         """Bootstrap -CC via Python API (zero AppleScript).
 
         1. Create tab in target window (or new window)
         2. Send tmux -CC attach command
         3. Poll for TmuxConnection discovery (~0.5s typical)
         4. Track gateway session ID for cleanup
+        5. Return the tmux connection_id for scoped tab searches
+
+        Returns the tmux connection_id on success, None on failure.
         """
         import iterm2
 
         if self._connection is None or self._app is None:
-            return
+            return None
 
         try:
             if window_id:
@@ -276,25 +281,35 @@ class ItermManager:
             gateway = tab.current_session
             await gateway.async_send_text(f"tmux -CC attach -t {tmux_session}\n")
 
-            # Track gateway for cleanup
+            # Track gateway for cleanup and persist
             self._gateways[tmux_session] = gateway.session_id
+            await self._save_state_locked()
             logger.debug(
                 "Bootstrapped -CC for %s, gateway=%s",
                 tmux_session, gateway.session_id,
             )
 
-            # Wait for -CC connection to establish
+            # Wait for -CC connection to establish and return its connection_id
             attempts = int(_CC_DISCOVERY_TIMEOUT_S / _CC_DISCOVERY_POLL_S)
             for i in range(attempts):
                 await asyncio.sleep(_CC_DISCOVERY_POLL_S)
                 try:
                     conns = await iterm2.async_get_tmux_connections(self._connection)
+                    for conn in conns:
+                        if conn.owning_session == gateway.session_id:
+                            logger.debug(
+                                "-CC connection discovered after %.1fs "
+                                "(connection_id=%s)",
+                                (i + 1) * _CC_DISCOVERY_POLL_S,
+                                conn.connection_id,
+                            )
+                            return conn.connection_id
+                    # Connections found but none owned by our gateway yet
                     if conns:
                         logger.debug(
-                            "-CC connection discovered after %.1fs (%d connection(s))",
-                            (i + 1) * _CC_DISCOVERY_POLL_S, len(conns),
+                            "-CC connections found but none owned by gateway %s",
+                            gateway.session_id,
                         )
-                        return
                 except Exception:
                     pass
 
@@ -302,8 +317,10 @@ class ItermManager:
                 "Timed out waiting for -CC connection for %s after %.0fs",
                 tmux_session, _CC_DISCOVERY_TIMEOUT_S,
             )
+            return None
         except Exception as e:
             logger.warning("Failed to bootstrap -CC for %s: %s", tmux_session, e)
+            return None
 
     # ---- Internal: window discovery ----
 
@@ -349,12 +366,12 @@ class ItermManager:
         return None
 
     async def _discover_window_for_session(
-        self, tmux_session: str,
+        self, tmux_connection_id: str,
     ) -> str | None:
-        """Find the iTerm window containing the newly created -CC tabs.
+        """Find the iTerm window containing the -CC tabs for a specific connection.
 
         After bootstrap, iTerm creates native tabs for tmux windows.
-        Find the window containing a tab with tmux_window_id != -1.
+        Scoped by tmux_connection_id to avoid picking up tabs from other connections.
         """
         if self._app is None:
             return None
@@ -366,23 +383,25 @@ class ItermManager:
 
         for w in app.terminal_windows:
             for t in w.tabs:
-                if t.tmux_window_id is not None and str(t.tmux_window_id) != "-1":
+                if t.tmux_connection_id == tmux_connection_id:
                     return w.window_id
         return None
 
-    async def _find_tmux_tab_session(self) -> str | None:
-        """Find the iTerm session ID of the most recently created -CC tab.
+    async def _find_tmux_tab_session(
+        self, tmux_connection_id: str,
+    ) -> str | None:
+        """Find the iTerm session ID of the -CC tab for a specific connection.
 
-        After bootstrap, the newest tab with tmux_window_id != -1 is our tab.
+        Scoped by tmux_connection_id to avoid picking up tabs from other
+        concurrent -CC connections (concurrent spawn race fix).
         """
         app = await self.ensure_connected()
         if app is None:
             return None
 
-        # Find any tab with a real tmux_window_id
         for w in app.terminal_windows:
             for t in w.tabs:
-                if t.tmux_window_id is not None and str(t.tmux_window_id) != "-1":
+                if t.tmux_connection_id == tmux_connection_id:
                     return t.current_session.session_id
         return None
 
@@ -440,20 +459,38 @@ class ItermManager:
 
     # ---- Internal: persistence ----
 
-    def _load_window_ids(self) -> None:
-        """Load persisted window IDs from disk."""
+    def _load_state(self) -> None:
+        """Load persisted window and gateway IDs from disk.
+
+        Backward-compatible: detects old format (flat dict of windows only)
+        and migrates to new format with separate windows and gateways keys.
+        """
         if self._WINDOWS_PATH.exists():
             try:
                 data = json.loads(self._WINDOWS_PATH.read_text())
                 if isinstance(data, dict):
-                    self._windows = data
+                    if "windows" in data:
+                        # New format: {windows: {...}, gateways: {...}}
+                        self._windows = data.get("windows", {})
+                        self._gateways = data.get("gateways", {})
+                    else:
+                        # Old format: flat dict is windows only
+                        self._windows = data
             except (json.JSONDecodeError, OSError):
                 pass
 
-    def _save_window_ids(self) -> None:
-        """Persist window IDs to disk."""
+    def _save_state(self) -> None:
+        """Persist window and gateway IDs to disk."""
         try:
             self._WINDOWS_PATH.parent.mkdir(parents=True, exist_ok=True)
-            self._WINDOWS_PATH.write_text(json.dumps(self._windows, indent=2))
+            self._WINDOWS_PATH.write_text(json.dumps({
+                "windows": self._windows,
+                "gateways": self._gateways,
+            }, indent=2))
         except OSError:
             pass
+
+    async def _save_state_locked(self) -> None:
+        """Persist state with asyncio lock for concurrent call safety."""
+        async with self._save_lock:
+            self._save_state()

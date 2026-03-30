@@ -47,9 +47,10 @@ def _install_fake_iterm2(monkeypatch):
             return None
 
     class FakeTab:
-        def __init__(self, tab_id="1", tmux_window_id=-1, sessions=None):
+        def __init__(self, tab_id="1", tmux_window_id=-1, tmux_connection_id=None, sessions=None):
             self.tab_id = tab_id
             self.tmux_window_id = tmux_window_id
+            self.tmux_connection_id = tmux_connection_id
             self.sessions = sessions or [FakeSession()]
             self.async_set_title = AsyncMock()
 
@@ -321,15 +322,19 @@ async def test_window_ids_persisted(monkeypatch, tmp_path):
     # Write and save
     mgr1 = ItermManager()
     mgr1._windows = {"sieve": "pty-SIEVE", "dev-ops": "pty-DEV"}
-    mgr1._save_window_ids()
+    mgr1._save_state()
 
     assert path.exists()
     data = json.loads(path.read_text())
-    assert data == {"sieve": "pty-SIEVE", "dev-ops": "pty-DEV"}
+    assert data == {
+        "windows": {"sieve": "pty-SIEVE", "dev-ops": "pty-DEV"},
+        "gateways": {},
+    }
 
     # Reload in a new instance
     mgr2 = ItermManager()
     assert mgr2._windows == {"sieve": "pty-SIEVE", "dev-ops": "pty-DEV"}
+    assert mgr2._gateways == {}
 
 
 @pytest.mark.asyncio
@@ -467,3 +472,220 @@ def test_next_color_index_increments(monkeypatch, tmp_path):
     assert mgr.next_color_index() == 0
     assert mgr.next_color_index() == 1
     assert mgr.next_color_index() == 2
+
+
+# ---- Tests: gateway persistence ----
+
+
+@pytest.mark.asyncio
+async def test_gateway_ids_persisted(monkeypatch, tmp_path):
+    """Gateway IDs are saved to disk and reloaded on init."""
+    fakes = _install_fake_iterm2(monkeypatch)
+    path = tmp_path / "iterm-windows.json"
+    monkeypatch.setattr(
+        "maniple_mcp.iterm_manager.ItermManager._WINDOWS_PATH", path,
+    )
+
+    from maniple_mcp.iterm_manager import ItermManager
+
+    # Write windows and gateways, then save
+    mgr1 = ItermManager()
+    mgr1._windows = {"dev-ops": "pty-DEV"}
+    mgr1._gateways = {"maniple-worker-1": "gateway-abc"}
+    mgr1._save_state()
+
+    assert path.exists()
+    data = json.loads(path.read_text())
+    assert data == {
+        "windows": {"dev-ops": "pty-DEV"},
+        "gateways": {"maniple-worker-1": "gateway-abc"},
+    }
+
+    # Reload in a new instance
+    mgr2 = ItermManager()
+    assert mgr2._windows == {"dev-ops": "pty-DEV"}
+    assert mgr2._gateways == {"maniple-worker-1": "gateway-abc"}
+
+
+def test_old_format_loads_as_windows_only(monkeypatch, tmp_path):
+    """Old flat-dict format (pre-gateway) migrates to windows-only with empty gateways."""
+    path = tmp_path / "iterm-windows.json"
+    # Write old format: flat dict with no "windows" key
+    path.write_text(json.dumps({"sieve": "pty-SIEVE", "dev-ops": "pty-DEV"}))
+
+    _install_fake_iterm2(monkeypatch)
+    monkeypatch.setattr(
+        "maniple_mcp.iterm_manager.ItermManager._WINDOWS_PATH", path,
+    )
+
+    from maniple_mcp.iterm_manager import ItermManager
+
+    mgr = ItermManager()
+    assert mgr._windows == {"sieve": "pty-SIEVE", "dev-ops": "pty-DEV"}
+    assert mgr._gateways == {}
+
+
+@pytest.mark.asyncio
+async def test_close_session_removes_gateway_from_persistence(monkeypatch, tmp_path):
+    """close_session pops gateway and persists the change."""
+    fakes = _install_fake_iterm2(monkeypatch)
+    path = tmp_path / "iterm-windows.json"
+    monkeypatch.setattr(
+        "maniple_mcp.iterm_manager.ItermManager._WINDOWS_PATH", path,
+    )
+
+    gateway_session = fakes["FakeSession"](session_id="gateway-123")
+    tab = fakes["FakeTab"](tab_id="t-gw", sessions=[gateway_session])
+    window = fakes["FakeWindow"](window_id="pty-GW", tabs=[tab])
+    app = fakes["FakeApp"](windows=[window])
+
+    import iterm2
+    monkeypatch.setattr(iterm2, "async_get_app", AsyncMock(return_value=app))
+
+    from maniple_mcp.iterm_manager import ItermManager
+
+    mgr = ItermManager()
+    await mgr.ensure_connected()
+    mgr._app = app
+
+    # Simulate tracked gateway
+    mgr._gateways["test-session"] = "gateway-123"
+    mgr._save_state()
+
+    await mgr.close_session("test-session")
+
+    # Gateway should be removed from memory and disk
+    assert "test-session" not in mgr._gateways
+    data = json.loads(path.read_text())
+    assert "test-session" not in data.get("gateways", {})
+
+
+@pytest.mark.asyncio
+async def test_close_session_after_restart_finds_gateway(monkeypatch, tmp_path):
+    """Combined path: gateway persisted → new ItermManager → close_session finds and closes it."""
+    fakes = _install_fake_iterm2(monkeypatch)
+    path = tmp_path / "iterm-windows.json"
+    monkeypatch.setattr(
+        "maniple_mcp.iterm_manager.ItermManager._WINDOWS_PATH", path,
+    )
+
+    # Pre-seed gateway data (simulating prior session)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({
+        "windows": {"dev-ops": "pty-DEV"},
+        "gateways": {"maniple-worker-1": "gateway-xyz"},
+    }))
+
+    # Set up fake app with matching gateway session
+    gateway_session = fakes["FakeSession"](session_id="gateway-xyz")
+    tab = fakes["FakeTab"](tab_id="t-gw", sessions=[gateway_session])
+    window = fakes["FakeWindow"](window_id="pty-DEV", tabs=[tab])
+    app = fakes["FakeApp"](windows=[window])
+
+    import iterm2
+    monkeypatch.setattr(iterm2, "async_get_app", AsyncMock(return_value=app))
+
+    from maniple_mcp.iterm_manager import ItermManager
+
+    # New instance (simulating restart) — should load gateways from disk
+    mgr = ItermManager()
+    assert mgr._gateways == {"maniple-worker-1": "gateway-xyz"}
+
+    await mgr.ensure_connected()
+    mgr._app = app
+
+    await mgr.close_session("maniple-worker-1")
+
+    # Gateway should have been found and closed
+    gateway_session.async_close.assert_called_once_with(force=True)
+    assert "maniple-worker-1" not in mgr._gateways
+
+
+# ---- Tests: scoped tab/window discovery ----
+
+
+@pytest.mark.asyncio
+async def test_find_tmux_tab_session_scoped_to_connection(monkeypatch, tmp_path):
+    """_find_tmux_tab_session returns tab matching tmux_connection_id, ignoring others."""
+    fakes = _install_fake_iterm2(monkeypatch)
+    monkeypatch.setattr(
+        "maniple_mcp.iterm_manager.ItermManager._WINDOWS_PATH",
+        tmp_path / "iterm-windows.json",
+    )
+
+    # Window with two tmux tabs from different connections
+    session_a = fakes["FakeSession"](session_id="sess-A")
+    session_b = fakes["FakeSession"](session_id="sess-B")
+    tab_a = fakes["FakeTab"](
+        tab_id="t-A", tmux_window_id="@1", tmux_connection_id="conn-111",
+        sessions=[session_a],
+    )
+    tab_b = fakes["FakeTab"](
+        tab_id="t-B", tmux_window_id="@2", tmux_connection_id="conn-222",
+        sessions=[session_b],
+    )
+    window = fakes["FakeWindow"](window_id="pty-W", tabs=[tab_a, tab_b])
+    app = fakes["FakeApp"](windows=[window])
+
+    import iterm2
+    monkeypatch.setattr(iterm2, "async_get_app", AsyncMock(return_value=app))
+
+    from maniple_mcp.iterm_manager import ItermManager
+
+    mgr = ItermManager()
+    await mgr.ensure_connected()
+    mgr._app = app
+
+    # Should find tab_b (conn-222), not tab_a (conn-111)
+    result = await mgr._find_tmux_tab_session("conn-222")
+    assert result == "sess-B"
+
+    # Should find tab_a (conn-111)
+    result = await mgr._find_tmux_tab_session("conn-111")
+    assert result == "sess-A"
+
+    # Unknown connection returns None
+    result = await mgr._find_tmux_tab_session("conn-999")
+    assert result is None
+
+
+@pytest.mark.asyncio
+async def test_discover_window_scoped_to_connection(monkeypatch, tmp_path):
+    """_discover_window_for_session returns window containing matching tmux_connection_id."""
+    fakes = _install_fake_iterm2(monkeypatch)
+    monkeypatch.setattr(
+        "maniple_mcp.iterm_manager.ItermManager._WINDOWS_PATH",
+        tmp_path / "iterm-windows.json",
+    )
+
+    # Two windows, each with a tmux tab from different connections
+    tab_1 = fakes["FakeTab"](
+        tab_id="t-1", tmux_window_id="@1", tmux_connection_id="conn-AAA",
+    )
+    tab_2 = fakes["FakeTab"](
+        tab_id="t-2", tmux_window_id="@2", tmux_connection_id="conn-BBB",
+    )
+    window_1 = fakes["FakeWindow"](window_id="pty-W1", tabs=[tab_1])
+    window_2 = fakes["FakeWindow"](window_id="pty-W2", tabs=[tab_2])
+    app = fakes["FakeApp"](windows=[window_1, window_2])
+
+    import iterm2
+    monkeypatch.setattr(iterm2, "async_get_app", AsyncMock(return_value=app))
+
+    from maniple_mcp.iterm_manager import ItermManager
+
+    mgr = ItermManager()
+    await mgr.ensure_connected()
+    mgr._app = app
+
+    # Should find window_2 for conn-BBB
+    result = await mgr._discover_window_for_session("conn-BBB")
+    assert result == "pty-W2"
+
+    # Should find window_1 for conn-AAA
+    result = await mgr._discover_window_for_session("conn-AAA")
+    assert result == "pty-W1"
+
+    # Unknown connection returns None
+    result = await mgr._discover_window_for_session("conn-ZZZ")
+    assert result is None
