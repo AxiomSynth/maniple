@@ -266,6 +266,12 @@ class TmuxBackend(TerminalBackend):
         # Register pane-exited hook for crash detection.
         # When the process in the pane exits (crash, OOM, manual kill),
         # write a sentinel file that the idle detector and registry can check.
+        #
+        # Note: pane-exited does NOT fire when a -CC native tab is closed
+        # (PAT-075). For -CC sessions, the idle detector falls back to
+        # tmux has-session checks (~5s poll), which is acceptable latency.
+        # The after-kill-pane global hook cannot be used because #{pane_id}
+        # reports the surviving pane, not the killed one.
         sentinel_dir = Path.home() / ".maniple" / "sentinels"
         sentinel_dir.mkdir(parents=True, exist_ok=True)
         safe_pane_id = pane_id.replace("%", "pane")
