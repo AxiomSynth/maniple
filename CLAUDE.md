@@ -21,19 +21,9 @@ If you get "pytest not found" or similar errors, run `uv sync` first to install 
 
 **DO NOT use:** `pytest`, `python -m pytest`, or `python3 -m pytest` — these will fail.
 
-## Backend Parity Policy (tmux + iTerm)
+## Terminal Backend
 
-Any feature or bugfix that touches terminal backend code **MUST** support **both** backends:
-- tmux backend
-- iTerm backend
-
-"Touches terminal backend code" includes (but is not limited to): tmux/iTerm backend implementations, backend selection/routing, adoption/discovery flows, session ID formats/parsing, and any tools or utilities that interact with terminal sessions.
-
-Changes that touch terminal backend code **MUST** include one of:
-- Tests covering **both** backends where applicable, or
-- An explicit, documented exception (in the PR description) that includes:
-  - Rationale for why parity is not feasible right now
-  - A follow-up issue to restore parity (Pebbles or GitHub issue link)
+Maniple uses a single terminal backend: **tmux** (via `TmuxBackend`). iTerm2 window/tab management is handled by `ItermManager` using the iTerm2 Python API + tmux -CC control mode. See `docs/tmux-cc-setup.md` for configuration requirements.
 
 ## Project Structure
 
@@ -42,11 +32,9 @@ src/claude_team_mcp/
 ├── server.py                  # FastMCP server entry point, registers all tools
 ├── registry.py                # Worker tracking (ManagedSession, SessionRegistry)
 ├── session_state.py           # JSONL parsing for Claude conversation logs
-├── iterm_utils.py             # Low-level iTerm2 API wrappers
+├── iterm_manager.py           # iTerm2 Python API + tmux -CC window management
 ├── idle_detection.py          # Stop hook completion detection
 ├── issue_tracker/             # Issue tracker abstraction + detection
-├── profile.py                 # iTerm2 profile/theme management
-├── colors.py                  # Golden ratio tab color generation
 ├── formatting.py              # Title/badge formatting utilities
 ├── names.py                   # Worker name generation (themed name sets)
 ├── worker_prompt.py           # Worker system prompt generation

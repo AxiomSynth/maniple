@@ -7,6 +7,8 @@ Provides a TerminalBackend implementation backed by tmux CLI commands.
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import re
 import shlex
 import subprocess
@@ -19,6 +21,8 @@ from ..iterm_manager import ItermManager
 
 if TYPE_CHECKING:
     from ..cli_backends import AgentCLI
+
+logger = logging.getLogger("maniple")
 
 
 KEY_MAP: dict[str, str] = {
@@ -124,10 +128,7 @@ def build_stop_hook_settings_file(marker_id: str) -> str:
     Returns:
         Path to the settings file (suitable for --settings flag)
     """
-    import json as _json
-    from pathlib import Path as _Path
-
-    settings_dir = _Path.home() / ".claude" / "claude-team-settings"
+    settings_dir = Path.home() / ".claude" / "claude-team-settings"
     settings_dir.mkdir(parents=True, exist_ok=True)
 
     settings = {
@@ -142,7 +143,7 @@ def build_stop_hook_settings_file(marker_id: str) -> str:
     }
 
     settings_file = settings_dir / f"worker-{marker_id}.json"
-    settings_file.write_text(_json.dumps(settings, indent=2))
+    settings_file.write_text(json.dumps(settings, indent=2))
     return str(settings_file)
 
 

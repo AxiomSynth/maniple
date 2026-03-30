@@ -253,8 +253,8 @@ class ItermManager:
         """
         import iterm2
 
-        assert self._connection is not None
-        assert self._app is not None
+        if self._connection is None or self._app is None:
+            return
 
         try:
             if window_id:
