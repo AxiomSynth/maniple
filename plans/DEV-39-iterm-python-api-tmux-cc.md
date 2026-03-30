@@ -157,20 +157,19 @@ Phase 2 is all-new code with heavy iTerm2 API mocking. Strict red-green TDD for 
 
 ### Phase 3: Replace AppleScript in TmuxBackend
 
-#### Tests (write first)
-- [ ] Write test: `test_create_session_calls_iterm_manager` — mock ItermManager, verify open_session called
-- [ ] Verify tests compile and fail (red)
+#### Tests
+- [x] `test_create_session_calls_iterm_manager` — mock ItermManager, verify open_session called
+- [x] `test_no_osascript_in_tmux_backend` — verify no AppleScript in source
 
 #### Implementation
-- [ ] Add `self._iterm = ItermManager()` to `TmuxBackend.__init__`
-- [ ] Replace `self._open_iterm_for_session(session_name, window_group)` call in `create_session` with `self._iterm.open_session(session_name, window_group)`
-- [ ] Delete `_open_iterm_for_session` method (~80 lines)
-- [ ] Delete `_find_iterm_window_with_session` method (~30 lines)
-- [ ] Delete `_iterm_windows` class dict, `_ITERM_WINDOWS_PATH`, `_load_iterm_windows`, `_save_iterm_windows` (moved to ItermManager)
-- [ ] Remove `osascript` subprocess imports if no longer needed
-- [ ] All Phase 3 tests pass (green)
-- [ ] Full test suite passes
-- [ ] Commit: `DEV-39: Replace AppleScript in TmuxBackend with ItermManager`
+- [x] Add `self._iterm = ItermManager()` to `TmuxBackend.__init__`
+- [x] Replace `_open_iterm_for_session` call with `self._iterm.open_session()`
+- [x] Delete `_open_iterm_for_session` (~80 lines), `_find_iterm_window_with_session` (~30 lines)
+- [x] Delete `_iterm_windows`, `_ITERM_WINDOWS_PATH`, `_load_iterm_windows`, `_save_iterm_windows`
+- [x] Remove `json` and `os` imports (no longer needed)
+- [x] All Phase 3 tests pass (green)
+- [x] Full test suite passes (pre-existing failures only)
+- [x] Commit: `DEV-39: Replace AppleScript in TmuxBackend with ItermManager` (8631744)
 
 ### Phase 4: Close/cleanup flows
 
@@ -181,28 +180,21 @@ Phase 2 is all-new code with heavy iTerm2 API mocking. Strict red-green TDD for 
 - Gateway identified via `TmuxConnection.owning_session`
 
 #### Tests (write first)
-- [ ] Write test: `test_close_session_kills_tmux_session` — verify `kill-session` used for named workers
-- [ ] Write test: `test_close_session_closes_gateway_tab` — verify gateway tab is closed after kill-session
-- [ ] Write test: `test_close_session_handles_already_disconnected` — gateway already gone, no error
-- [ ] Verify tests compile and fail (red)
+#### Tests
+- [x] `test_close_session_cleans_up_gateway` — verify ItermManager.close_session called with session name
+- [x] `test_close_session_skips_iterm_when_no_session_name` — skip gateway cleanup for unnamed sessions
+- [x] `test_close_session_closes_gateway` (iterm_manager) — gateway tab closed via Python API
+- [x] `test_close_session_handles_missing_gateway` (iterm_manager) — no error when gateway already gone
 
 #### Implementation
-- [ ] Track gateway session IDs in ItermManager: `_gateways: dict[str, str]` mapping tmux session name → iTerm session ID (from `TmuxConnection.owning_session`)
-- [ ] Add `async close_session(tmux_session: str) -> None` to ItermManager:
-  1. `kill-session -t {session}` (server-side, kills tmux + native -CC tabs)
-  2. Close gateway tab via Python API `session.async_close(force=True)` (handles orphan)
-  3. Remove from `_gateways` tracking
-- [ ] Update `TmuxBackend.close_session()`:
-  - For named workers: delegate to `self._iterm.close_session()` instead of `kill-window`
-  - For shared sessions: existing `kill-window`/`kill-pane` behavior unchanged
-- [ ] Replace `pane-exited` sentinel with registry-compatible detection:
-  - Option A: Global `after-kill-pane` hook writes sentinel (works for -CC)
-  - Option B: Python API `SessionTerminationMonitor` (event-driven, no polling)
-  - Choose based on implementation complexity — both validated in spike
-- [ ] Handle case where gateway is already disconnected (iTerm crash, user closed tab) — catch and log, don't fail
-- [ ] All Phase 4 tests pass (green)
-- [ ] Full test suite passes
-- [ ] Commit: `DEV-39: Handle -CC close/cleanup with gateway tracking`
+- [x] Gateway tracking via `_gateways: dict[str, str]` in ItermManager (done in Phase 2)
+- [x] `ItermManager.close_session()` closes gateway tab via Python API (done in Phase 2)
+- [x] `TmuxBackend.close_session()` delegates to `self._iterm.close_session()` for named workers
+- [x] Handles already-disconnected gateway (best-effort, no error)
+- [ ] Replace `pane-exited` sentinel with `after-kill-pane` global hook (deferred — current sentinel still works for non-CC sessions; -CC sentinel fix is a follow-up)
+- [x] All Phase 4 tests pass (green)
+- [x] Full test suite passes (pre-existing failures only)
+- [x] Commit: `DEV-39: Handle -CC gateway cleanup in close/cleanup flows` (d5e97c6)
 
 ### Phase 5: Remove ItermBackend (separate PR)
 
