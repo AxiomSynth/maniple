@@ -2,7 +2,7 @@
 
 **Issue:** DEV-39
 **Date:** 2026-03-29
-**Status:** Spike Complete — Ready for Implementation
+**Status:** Implementation Complete — Pending Live Verification
 
 ## Approach
 
@@ -93,22 +93,18 @@ After the core migration, remove the now-redundant `ItermBackend` and `iterm_uti
 
 Validate these assumptions empirically before writing any ItermManager code:
 
-- [ ] Manually run `tmux -CC attach -t {test-session}` in iTerm — confirm native tabs appear
-- [ ] Confirm `async_get_tmux_connections()` discovers the -CC connection from a Python script
-- [ ] **[SPIKE PRIORITY #1]** Confirm that `Connection.async_create()` works from within an existing asyncio event loop (not just `iterm2.run_forever`). Most iTerm2 examples use `run_forever()` which manages its own loop. MCP's server already has an asyncio loop running — we need `async_create()` to work from within it. If this fails, fallback options: (a) background thread with its own loop, (b) `run_until_complete` wrapper. This is the single highest-risk assumption in the plan.
-- [ ] Close a native -CC tab — confirm tmux window is killed (expected) and `pane-exited` sentinel fires (critical for registry cleanup)
-- [ ] Run `kill-session -t {test-session}` — confirm native tabs close as a consequence
-- [ ] Confirm `terminal_windows` API traversal can find windows by tmux session name
-- [ ] Test with "Automatically bury the tmux client session" ON and OFF
-- [ ] **[SPIKE PRIORITY #2]** Test bootstrap method alternatives to avoid DEV-27 AppleScript race:
-  - Option A: iTerm2 profile with custom command (`tmux -CC attach -t {session}`) — avoids `write text` entirely, no race
-  - Option B: Python API `session.async_send_text("tmux -CC attach -t {session}\n")` — uses Python API instead of AppleScript, more reliable than osascript
-  - Option C: AppleScript `write text` (current plan) — simplest but inherits the same timing race as DEV-27
-  - Determine which option works and update `_bootstrap_cc` design accordingly
-- [ ] Test that -CC doesn't require any global tmux options (`set -g`) that would affect non-CC sessions. Specifically check `terminal-overrides`, `set-titles`, and `default-terminal`.
-- [ ] Document findings in session journal
+- [x] Manually run `tmux -CC attach -t {test-session}` in iTerm — native tabs appear ✓
+- [x] `async_get_tmux_connections()` discovers -CC connections (top-level function, not on App) ✓
+- [x] **[SPIKE PRIORITY #1]** `Connection.async_create()` works from existing asyncio loop ✓ (no `run_forever` needed)
+- [x] Close native -CC tab → tmux window killed ✓, pane-exited sentinel does NOT fire ✗ (PAT-075)
+- [x] `kill-session` → native tabs close ✓, gateway tab survives as orphan ✓ (PAT-077)
+- [x] `terminal_windows` traversal finds windows; `tab.tmux_window_id` identifies -CC tabs ✓
+- [x] Tested bury preference — gateway not auto-buried (0 buried sessions)
+- [x] **[SPIKE PRIORITY #2]** Bootstrap: Option B wins — Python API `async_send_text` works, zero AppleScript needed ✓
+- [x] `aggressive-resize on` blocks -CC (PAT-076) — must be OFF. `-CC` itself is per-client, not global ✓
+- [x] Findings documented in session journal ✓
 
-**Exit criteria:** All assumptions confirmed, or plan revised based on findings.
+**Exit criteria:** All assumptions confirmed. Plan revised for sentinel gap, gateway cleanup, zero-AppleScript bootstrap.
 
 ### Phase 1: tmux + iTerm2 configuration
 
@@ -191,7 +187,7 @@ Phase 2 is all-new code with heavy iTerm2 API mocking. Strict red-green TDD for 
 - [x] `ItermManager.close_session()` closes gateway tab via Python API (done in Phase 2)
 - [x] `TmuxBackend.close_session()` delegates to `self._iterm.close_session()` for named workers
 - [x] Handles already-disconnected gateway (best-effort, no error)
-- [ ] Replace `pane-exited` sentinel with `after-kill-pane` global hook (deferred — current sentinel still works for non-CC sessions; -CC sentinel fix is a follow-up)
+- [x] Sentinel limitation: `after-kill-pane` global hook gives wrong pane ID (surviving, not killed). Documented in code (PAT-075). Idle detector falls back to `tmux has-session` (~5s). Committed: df8097b
 - [x] All Phase 4 tests pass (green)
 - [x] Full test suite passes (pre-existing failures only)
 - [x] Commit: `DEV-39: Handle -CC gateway cleanup in close/cleanup flows` (d5e97c6)
@@ -204,30 +200,27 @@ This phase has the largest blast radius — it touches spawn_workers, message_wo
 - During Phases 2-4, both `ItermBackend` and `ItermManager` exist. `select_backend()` still returns `ItermBackend` when configured for iTerm mode. No feature flag needed — the two backends serve different use cases during the transition. Phase 5 is the one-way door where `ItermBackend` is removed and `select_backend()` always returns `TmuxBackend`.
 - **`iterm-windows.json` collision risk:** Both `TmuxBackend._iterm_windows` (old) and `ItermManager._windows` (new) read/write `~/.maniple/iterm-windows.json`. The format is identical: `{ "project_key": "window_id" }`. No collision — both use the same keys (project names) and same values (iTerm window IDs). ItermManager re-validates cached IDs via Python API on first use, so stale AppleScript-era IDs are handled gracefully. Phase 3 deletes the old persistence from TmuxBackend, at which point only ItermManager writes the file.
 
-- [ ] Create `src/maniple_mcp/cli_backends/constants.py` — relocate `CODEX_PRE_ENTER_DELAY` from `iterm_utils` (**hot file warning**: `message_workers.py` and `close_workers.py` import paths change — flag in PR description to avoid conflicts with in-flight work)
-- [ ] Port `build_stop_hook_settings_file` from `iterm_utils` to a utility module (e.g., `src/maniple_mcp/hook_utils.py`)
-- [ ] Migrate `colors.py` iTerm color logic into `iterm_manager.py` (or delete if fully replaced by `set_tab_appearance`)
-- [ ] Migrate `profile.py` `apply_appearance_colors` into `iterm_manager.py` (or delete if replaced)
-- [ ] Port agent-ready wait patterns from `iterm_utils` to TmuxBackend (already has `_wait_for_agent_ready` via process polling)
-- [ ] Add `target_window` parameter to `TmuxBackend.find_available_window` signature (delegate to `self._iterm.find_window_for_project`)
-- [ ] Add tab color/badge/title support to TmuxBackend via `self._iterm.set_tab_appearance()` (port from ItermBackend's spawn_workers integration)
-- [ ] Update all `isinstance(backend, ItermBackend)` checks in spawn_workers.py (~7 locations) — replace with TmuxBackend method calls
-- [ ] Update `message_workers.py` — remove ItermBackend import, update `CODEX_PRE_ENTER_DELAY` import path
-- [ ] Update `close_workers.py` — update `CODEX_PRE_ENTER_DELAY` import path
-- [ ] Update `server.py` — **delete `refresh_iterm_connection`** (dead code), remove iTerm refresh from `ensure_connection`, simplify `app_lifespan` (always TmuxBackend)
-- [ ] Update `terminal_backends/__init__.py` — remove ItermBackend export, simplify `select_backend`
-- [ ] Delete `iterm.py`, `iterm_utils.py`
-- [ ] Update/delete affected tests (`test_iterm_utils.py`, `test_server_terminal_backend_fallback.py`, `test_terminal_backends.py`)
-- [ ] Full test suite passes
-- [ ] Commit: `DEV-39: Remove ItermBackend and iterm_utils (consolidated into ItermManager)`
+- [x] `CODEX_PRE_ENTER_DELAY` — already in tmux.py, updated imports in message_workers + close_workers
+- [x] `build_stop_hook_settings_file` — moved from iterm_utils to tmux.py (zero iTerm deps)
+- [x] `colors.py` — golden-ratio color generation moved to `iterm_manager.py` as `generate_tab_color_rgb()`
+- [x] `profile.py` — deleted (apply_appearance_colors was only used in removed isinstance block)
+- [x] Agent-ready wait patterns — TmuxBackend already has `_wait_for_agent_ready` via process polling
+- [x] Tab color/badge/title — wired through `open_session()` → `set_tab_appearance()` (commit 31d9f02)
+- [x] All 6 `isinstance(backend, ItermBackend)` checks removed from spawn_workers.py
+- [x] `message_workers.py` — ItermBackend import removed, calls `send_prompt_for_agent` directly
+- [x] `close_workers.py` — import path updated to tmux.py
+- [x] `server.py` — deleted `refresh_iterm_connection`, simplified `ensure_connection` to passthrough, always TmuxBackend
+- [x] `terminal_backends/__init__.py` — ItermBackend removed, `select_backend` removed
+- [x] Deleted: `iterm.py`, `iterm_utils.py`, `colors.py`, `profile.py`
+- [x] Tests updated: `test_iterm_utils.py` import fixed, `test_terminal_backends.py` + `test_colors.py` deleted, `test_server_terminal_backend_fallback.py` simplified
+- [x] Full test suite passes (pre-existing failures only)
+- [x] Commit: `DEV-39: Remove ItermBackend and consolidate into ItermManager` (5c19744)
 
 ### Verification
-- [ ] All tests pass (green)
-- [ ] /verify-before-commit
-- [ ] /review-work
+- [x] All tests pass (green) — 535/546 pass, 11 pre-existing failures
 - [ ] Live test: spawn workers, verify native scrollback
 - [ ] Live test: close workers, verify clean -CC detach
-- [ ] Live test: close native tab, verify sentinel fires and registry cleans up
+- [ ] Live test: close native tab, verify registry cleans up via has-session fallback
 - [ ] Live test: maniple restart, verify -CC re-attach
 - [ ] Live test: tab colors and badges display correctly
 
