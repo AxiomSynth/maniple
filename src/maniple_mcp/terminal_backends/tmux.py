@@ -680,7 +680,7 @@ class TmuxBackend(TerminalBackend):
             )
 
         # Post-ready settling delay: let the TUI finish initializing before
-        # the first prompt is sent.  See POST_READY_DELAY docstring.
+        # the first prompt is sent.  See module constant POST_READY_DELAY.
         await asyncio.sleep(POST_READY_DELAY)
 
     async def start_claude_in_session(
@@ -799,6 +799,8 @@ class TmuxBackend(TerminalBackend):
                 else:
                     consecutive_stable = 0
             except subprocess.CalledProcessError:
+                if consecutive_stable > 0:
+                    logger.debug("Pane %s disappeared mid-poll, resetting stable count", pane_id)
                 consecutive_stable = 0  # pane may not exist yet; reset and keep polling
 
             await asyncio.sleep(poll_interval)

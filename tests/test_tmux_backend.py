@@ -3,7 +3,6 @@
 import asyncio
 import inspect
 import subprocess
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -397,7 +396,8 @@ async def test_wait_for_agent_ready_requires_stable_count(monkeypatch):
     """_wait_for_agent_ready must see N consecutive non-shell polls before returning True.
 
     With stable_count=3, the method should poll at least 3 times before returning.
-    The current (broken) code returns on the first non-shell detection.
+    Previously, broken code returned on the first non-shell detection — this test
+    verifies the fix.
     """
     backend = TmuxBackend()
     session = TerminalSession("tmux", "%1", "%1")
@@ -432,12 +432,18 @@ async def test_wait_for_agent_ready_resets_on_shell(monkeypatch):
     backend = TmuxBackend()
     session = TerminalSession("tmux", "%1", "%1")
 
-    # Pattern: node, zsh (reset!), node, node → should need 4 polls minimum
-    poll_results = iter(["node", "zsh", "node", "node", "node"])
+    # Pattern: node, zsh (reset!), node, node → stable_count=2 needs
+    # at least 4 polls (1st "node" doesn't count after reset).
+    poll_results = ["node", "zsh", "node", "node"]
+    poll_count = 0
 
     async def fake_run(args):
+        nonlocal poll_count
         if args[0] == "display-message":
-            return next(poll_results)
+            poll_count += 1
+            if poll_count <= len(poll_results):
+                return poll_results[poll_count - 1]
+            return "node"  # safe fallback
         return ""
 
     monkeypatch.setattr(backend, "_run_tmux", fake_run)
@@ -451,6 +457,8 @@ async def test_wait_for_agent_ready_resets_on_shell(monkeypatch):
         session, cli, timeout_seconds=5.0, poll_interval=0.01, stable_count=2,
     )
     assert result is True
+    # Must have polled at least 4 times: node(1), zsh(reset), node(1), node(2=done)
+    assert poll_count >= 4, f"Expected at least 4 polls for reset scenario, got {poll_count}"
 
 
 @pytest.mark.asyncio
@@ -519,11 +527,9 @@ async def test_send_prompt_for_agent_claude_minimum_delay(monkeypatch):
     session = TerminalSession("tmux", "%1", "%1")
 
     sleep_durations = []
-    original_sleep = asyncio.sleep
 
     async def tracking_sleep(duration):
         sleep_durations.append(duration)
-        # Don't actually sleep in tests
 
     async def fake_run(args):
         return ""
@@ -561,3 +567,59 @@ async def test_send_prompt_for_agent_codex_minimum_delay(monkeypatch):
 
     assert len(sleep_durations) == 1
     assert sleep_durations[0] >= CODEX_PRE_ENTER_DELAY
+
+
+@pytest.mark.asyncio
+async def test_start_agent_in_session_post_ready_delay(monkeypatch):
+    """start_agent_in_session awaits POST_READY_DELAY after agent is detected ready."""
+    from maniple_mcp.terminal_backends.tmux import POST_READY_DELAY
+
+    backend = TmuxBackend()
+    session = TerminalSession("tmux", "%1", "%1")
+
+    sleep_durations = []
+
+    async def tracking_sleep(duration):
+        sleep_durations.append(duration)
+
+    from maniple_mcp.terminal_backends.tmux import SHELL_READY_MARKER
+
+    async def fake_run(args):
+        if args[0] == "display-message":
+            return "node"  # agent process detected
+        if args[0] == "capture-pane":
+            return SHELL_READY_MARKER  # shell ready marker found
+        if args[0] == "send-keys":
+            return ""
+        if args[0] == "load-buffer":
+            return ""
+        if args[0] == "paste-buffer":
+            return ""
+        if args[0] == "delete-buffer":
+            return ""
+        return ""
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+    monkeypatch.setattr(asyncio, "sleep", tracking_sleep)
+
+    cli = type("FakeCLI", (), {
+        "engine_id": "claude",
+        "command": lambda self: "claude",
+        "ready_patterns": lambda self: ["$"],
+        "supports_settings_file": lambda self: False,
+        "build_full_command": lambda self, **kw: "claude",
+    })()
+
+    await backend.start_agent_in_session(
+        handle=session,
+        cli=cli,
+        project_path="/tmp/test",
+        shell_ready_timeout=5.0,
+        agent_ready_timeout=5.0,
+    )
+
+    # The last sleep should be POST_READY_DELAY (after _wait_for_agent_ready returns)
+    assert any(d >= POST_READY_DELAY for d in sleep_durations), (
+        f"Expected at least one sleep >= POST_READY_DELAY ({POST_READY_DELAY}), "
+        f"got {sleep_durations}"
+    )
