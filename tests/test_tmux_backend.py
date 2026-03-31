@@ -1,8 +1,8 @@
 """Tests for the tmux terminal backend."""
 
+import asyncio
 import inspect
 import subprocess
-from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -362,3 +362,264 @@ def test_no_osascript_in_tmux_backend():
     import maniple_mcp.terminal_backends.tmux as tmux_mod
     source = inspect.getsource(tmux_mod)
     assert "osascript" not in source, "Found 'osascript' in tmux backend — AppleScript should be fully removed"
+
+
+# --- DEV-27: send-keys race condition tests ---
+
+
+def test_compute_paste_delay_single_line():
+    """Single-line text gets minimum 0.05s delay."""
+    backend = TmuxBackend()
+    assert backend._compute_paste_delay("hello world") == 0.05
+
+
+def test_compute_paste_delay_multi_line():
+    """Multi-line text gets computed delay based on lines and chars."""
+    backend = TmuxBackend()
+    text = "line1\nline2\nline3\nline4\n"
+    delay = backend._compute_paste_delay(text)
+    # 4 newlines, ~24 chars: 0.1 + (4 * 0.01) + (24/1000 * 0.05) = 0.1412
+    assert delay > 0.05, "Multi-line delay should exceed single-line minimum"
+    assert delay <= 2.0, "Delay should be capped at 2.0s"
+
+
+def test_compute_paste_delay_cap():
+    """Very long text is capped at 2.0s."""
+    backend = TmuxBackend()
+    text = "x" * 50000 + "\n" * 100
+    delay = backend._compute_paste_delay(text)
+    assert delay == 2.0
+
+
+@pytest.mark.asyncio
+async def test_wait_for_agent_ready_requires_stable_count(monkeypatch):
+    """_wait_for_agent_ready must see N consecutive non-shell polls before returning True.
+
+    With stable_count=3, the method should poll at least 3 times before returning.
+    Previously, broken code returned on the first non-shell detection — this test
+    verifies the fix.
+    """
+    backend = TmuxBackend()
+    session = TerminalSession("tmux", "%1", "%1")
+
+    poll_count = 0
+
+    async def fake_run(args):
+        nonlocal poll_count
+        if args[0] == "display-message":
+            poll_count += 1
+            return "node"
+        return ""
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+
+    cli = type("FakeCLI", (), {
+        "engine_id": "claude",
+        "ready_patterns": lambda self: ["$"],
+    })()
+
+    result = await backend._wait_for_agent_ready(
+        session, cli, timeout_seconds=5.0, poll_interval=0.01, stable_count=3,
+    )
+    assert result is True
+    # Must have polled at least stable_count times (3), not returned on first detection
+    assert poll_count >= 3, f"Expected at least 3 polls for stable_count=3, got {poll_count}"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_agent_ready_resets_on_shell(monkeypatch):
+    """stable_count resets when a shell command is detected between agent detections."""
+    backend = TmuxBackend()
+    session = TerminalSession("tmux", "%1", "%1")
+
+    # Pattern: node, zsh (reset!), node, node → stable_count=2 needs
+    # at least 4 polls (1st "node" doesn't count after reset).
+    poll_results = ["node", "zsh", "node", "node"]
+    poll_count = 0
+
+    async def fake_run(args):
+        nonlocal poll_count
+        if args[0] == "display-message":
+            poll_count += 1
+            if poll_count <= len(poll_results):
+                return poll_results[poll_count - 1]
+            return "node"  # safe fallback
+        return ""
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+
+    cli = type("FakeCLI", (), {
+        "engine_id": "claude",
+        "ready_patterns": lambda self: ["$"],
+    })()
+
+    result = await backend._wait_for_agent_ready(
+        session, cli, timeout_seconds=5.0, poll_interval=0.01, stable_count=2,
+    )
+    assert result is True
+    # Must have polled at least 4 times: node(1), zsh(reset), node(1), node(2=done)
+    assert poll_count >= 4, f"Expected at least 4 polls for reset scenario, got {poll_count}"
+
+
+@pytest.mark.asyncio
+async def test_wait_for_agent_ready_timeout(monkeypatch):
+    """_wait_for_agent_ready returns False when only shells are detected."""
+    backend = TmuxBackend()
+    session = TerminalSession("tmux", "%1", "%1")
+
+    async def fake_run(args):
+        if args[0] == "display-message":
+            return "zsh"
+        if args[0] == "capture-pane":
+            return "some random output"
+        return ""
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+
+    cli = type("FakeCLI", (), {
+        "engine_id": "claude",
+        "ready_patterns": lambda self: ["$"],
+    })()
+
+    result = await backend._wait_for_agent_ready(
+        session, cli, timeout_seconds=0.05, poll_interval=0.01, stable_count=2,
+    )
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_wait_for_agent_ready_pane_disappears(monkeypatch):
+    """Pane disappearing mid-poll (CalledProcessError) resets stable_count."""
+    backend = TmuxBackend()
+    session = TerminalSession("tmux", "%1", "%1")
+
+    # Pattern: node, CalledProcessError (reset!), node, node → needs 4 polls
+    call_count = 0
+
+    async def fake_run(args):
+        nonlocal call_count
+        if args[0] == "display-message":
+            call_count += 1
+            if call_count == 2:
+                raise subprocess.CalledProcessError(1, "tmux")
+            return "node"
+        return ""
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+
+    cli = type("FakeCLI", (), {
+        "engine_id": "claude",
+        "ready_patterns": lambda self: ["$"],
+    })()
+
+    result = await backend._wait_for_agent_ready(
+        session, cli, timeout_seconds=5.0, poll_interval=0.01, stable_count=2,
+    )
+    assert result is True
+
+
+@pytest.mark.asyncio
+async def test_send_prompt_for_agent_claude_minimum_delay(monkeypatch):
+    """send_prompt_for_agent applies CLAUDE_PRE_ENTER_DELAY floor for claude agents."""
+    from maniple_mcp.terminal_backends.tmux import CLAUDE_PRE_ENTER_DELAY
+
+    backend = TmuxBackend()
+    session = TerminalSession("tmux", "%1", "%1")
+
+    sleep_durations = []
+
+    async def tracking_sleep(duration):
+        sleep_durations.append(duration)
+
+    async def fake_run(args):
+        return ""
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+    monkeypatch.setattr(asyncio, "sleep", tracking_sleep)
+
+    await backend.send_prompt_for_agent(session, "short", agent_type="claude")
+
+    # The sleep before Enter should be at least CLAUDE_PRE_ENTER_DELAY
+    assert len(sleep_durations) == 1
+    assert sleep_durations[0] >= CLAUDE_PRE_ENTER_DELAY
+
+
+@pytest.mark.asyncio
+async def test_send_prompt_for_agent_codex_minimum_delay(monkeypatch):
+    """send_prompt_for_agent applies CODEX_PRE_ENTER_DELAY floor for codex agents."""
+    from maniple_mcp.terminal_backends.tmux import CODEX_PRE_ENTER_DELAY
+
+    backend = TmuxBackend()
+    session = TerminalSession("tmux", "%1", "%1")
+
+    sleep_durations = []
+
+    async def tracking_sleep(duration):
+        sleep_durations.append(duration)
+
+    async def fake_run(args):
+        return ""
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+    monkeypatch.setattr(asyncio, "sleep", tracking_sleep)
+
+    await backend.send_prompt_for_agent(session, "short", agent_type="codex")
+
+    assert len(sleep_durations) == 1
+    assert sleep_durations[0] >= CODEX_PRE_ENTER_DELAY
+
+
+@pytest.mark.asyncio
+async def test_start_agent_in_session_post_ready_delay(monkeypatch):
+    """start_agent_in_session awaits POST_READY_DELAY after agent is detected ready."""
+    from maniple_mcp.terminal_backends.tmux import POST_READY_DELAY
+
+    backend = TmuxBackend()
+    session = TerminalSession("tmux", "%1", "%1")
+
+    sleep_durations = []
+
+    async def tracking_sleep(duration):
+        sleep_durations.append(duration)
+
+    from maniple_mcp.terminal_backends.tmux import SHELL_READY_MARKER
+
+    async def fake_run(args):
+        if args[0] == "display-message":
+            return "node"  # agent process detected
+        if args[0] == "capture-pane":
+            return SHELL_READY_MARKER  # shell ready marker found
+        if args[0] == "send-keys":
+            return ""
+        if args[0] == "load-buffer":
+            return ""
+        if args[0] == "paste-buffer":
+            return ""
+        if args[0] == "delete-buffer":
+            return ""
+        return ""
+
+    monkeypatch.setattr(backend, "_run_tmux", fake_run)
+    monkeypatch.setattr(asyncio, "sleep", tracking_sleep)
+
+    cli = type("FakeCLI", (), {
+        "engine_id": "claude",
+        "command": lambda self: "claude",
+        "ready_patterns": lambda self: ["$"],
+        "supports_settings_file": lambda self: False,
+        "build_full_command": lambda self, **kw: "claude",
+    })()
+
+    await backend.start_agent_in_session(
+        handle=session,
+        cli=cli,
+        project_path="/tmp/test",
+        shell_ready_timeout=5.0,
+        agent_ready_timeout=5.0,
+    )
+
+    # The last sleep should be POST_READY_DELAY (after _wait_for_agent_ready returns)
+    assert any(d >= POST_READY_DELAY for d in sleep_durations), (
+        f"Expected at least one sleep >= POST_READY_DELAY ({POST_READY_DELAY}), "
+        f"got {sleep_durations}"
+    )
