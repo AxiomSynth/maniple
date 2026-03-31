@@ -947,9 +947,11 @@ class SessionRegistry:
             state = worker_state.get(session_id, "active")
             last_event_ts = worker_last_event_ts.get(session_id, now)
 
-            # Track closed sessions.
+            # Skip closed sessions entirely — no reason to load dead sessions
+            # into memory. They already have worker_closed events in the log.
             if state == "closed":
                 closed += 1
+                continue
 
             recovered = self._build_recovered_session(
                 session_id=session_id,
