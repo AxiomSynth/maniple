@@ -104,7 +104,7 @@ class ClaudeCLI(AgentCLI):
         """
         args: list[str] = []
 
-        if model:
+        if model and model != "default":
             args.append("--model")
             args.append(model)
 

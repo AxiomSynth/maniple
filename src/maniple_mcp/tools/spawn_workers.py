@@ -109,9 +109,10 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                 ```
             model: Required. The Claude model to use for this worker.
                 Passed as `claude --model {model}`. Common values:
-                - "sonnet": Best for implementation (code generation)
-                - "opus": Best for planning, review, and deep reasoning
-                - "haiku": Best for lightweight verification tasks
+                - "default": Use the account's configured model (no --model flag passed)
+                - "sonnet": Sonnet model
+                - "opus": Opus model (200k context)
+                - "haiku": Haiku model (lightweight coordination)
             agent_type: Which agent CLI to use (default "claude").
                 - "claude": Claude Code CLI (Stop hook idle detection)
                 - "codex": OpenAI Codex CLI (JSONL streaming idle detection)

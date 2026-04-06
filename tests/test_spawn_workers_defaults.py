@@ -386,6 +386,15 @@ def test_claude_cli_build_args_without_model():
     assert "--model" not in args
 
 
+def test_claude_cli_build_args_default_model_skips_flag():
+    """build_args(model="default") should not include --model (uses account default)."""
+    from maniple_mcp.cli_backends.claude import ClaudeCLI
+
+    cli = ClaudeCLI()
+    args = cli.build_args(model="default")
+    assert "--model" not in args
+
+
 @pytest.mark.asyncio
 async def test_spawn_workers_requires_model(tmp_path, monkeypatch):
     """spawn_workers should reject workers missing the required 'model' field."""
