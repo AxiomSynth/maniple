@@ -48,6 +48,7 @@ class AgentCLI(Protocol):
         dangerously_skip_permissions: bool = False,
         settings_file: str | None = None,
         plugin_dir: str | list[str] | None = None,
+        model: str | None = None,
     ) -> list[str]:
         """
         Build the argument list for the CLI command.
@@ -56,6 +57,7 @@ class AgentCLI(Protocol):
             dangerously_skip_permissions: If True, add flag to skip permission prompts
             settings_file: Optional path to settings file for hook injection
             plugin_dir: Optional path(s) to plugin directory (single string or list)
+            model: Optional model override (e.g., "sonnet", "opus", "haiku")
 
         Returns:
             List of command-line arguments (not including the command itself)
@@ -106,6 +108,7 @@ class AgentCLI(Protocol):
         plugin_dir: str | list[str] | None = None,
         session_name: str | None = None,
         resume_session: str | None = None,
+        model: str | None = None,
         env_vars: dict[str, str] | None = None,
     ) -> str:
         """
@@ -120,6 +123,7 @@ class AgentCLI(Protocol):
             plugin_dir: Optional path(s) to plugin directory (single string or list)
             session_name: Optional session display name (--name flag)
             resume_session: Optional session name/ID to resume (--resume flag)
+            model: Optional model override (e.g., "sonnet", "opus", "haiku")
             env_vars: Environment variables to prepend
 
         Returns:
@@ -132,6 +136,7 @@ class AgentCLI(Protocol):
             plugin_dir=plugin_dir,
             session_name=session_name,
             resume_session=resume_session,
+            model=model,
         )
 
         if args:

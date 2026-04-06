@@ -64,7 +64,11 @@ class FakeBackend:
             "dangerously_skip_permissions": dangerously_skip_permissions,
             "env": env,
             "stop_hook_marker_id": stop_hook_marker_id,
+            **kwargs,
         })
+
+    async def send_key(self, session: TerminalSession, key: str) -> None:
+        pass
 
     async def send_prompt_for_agent(
         self,
@@ -88,6 +92,7 @@ async def test_spawn_workers_uses_config_defaults(tmp_path, monkeypatch):
     config.defaults = DefaultsConfig(
         agent_type="codex",
         skip_permissions=True,
+        skip_worker_prompt=False,
         use_worktree=False,
         layout="new",
     )
@@ -132,6 +137,7 @@ async def test_spawn_workers_uses_config_defaults(tmp_path, monkeypatch):
         return None
 
     monkeypatch.setattr(session_state, "await_marker_in_jsonl", fake_await_marker_in_jsonl)
+    monkeypatch.setattr(session_state, "await_codex_marker_in_jsonl", fake_await_marker_in_jsonl)
     monkeypatch.setattr(session_state, "generate_marker_message", lambda *args, **kwargs: "MARKER")
 
     backend = FakeBackend()
@@ -151,7 +157,7 @@ async def test_spawn_workers_uses_config_defaults(tmp_path, monkeypatch):
 
     ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=app_ctx))
     result = await tool.run({
-        "workers": [{"project_path": str(repo_path), "name": "Worker1"}],
+        "workers": [{"project_path": str(repo_path), "name": "Worker1", "model": "sonnet"}],
     }, context=ctx)
 
     assert result["layout"] == "new"
@@ -228,7 +234,7 @@ async def test_spawn_workers_invalid_config_falls_back(tmp_path, monkeypatch):
 
     ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=app_ctx))
     result = await tool.run({
-        "workers": [{"project_path": str(repo_path), "name": "Worker1"}],
+        "workers": [{"project_path": str(repo_path), "name": "Worker1", "model": "sonnet"}],
     }, context=ctx)
 
     assert result["layout"] == "auto"
@@ -236,7 +242,8 @@ async def test_spawn_workers_invalid_config_falls_back(tmp_path, monkeypatch):
     assert backend.started[0]["dangerously_skip_permissions"] is False
     assert backend.started[0]["env"] is None
     assert result["sessions"]["Worker1"]["agent_type"] == "claude"
-    assert prompt_calls == [True]
+    # Default config has skip_worker_prompt=True, so no prompt is sent
+    assert prompt_calls == []
 
 
 @pytest.mark.asyncio
@@ -290,7 +297,7 @@ async def test_spawn_workers_merges_codex_ci_with_worktree_tracker_env(tmp_path,
 
     ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=app_ctx))
     await tool.run({
-        "workers": [{"project_path": str(repo_path), "name": "Worker1"}],
+        "workers": [{"project_path": str(repo_path), "name": "Worker1", "model": "sonnet"}],
     }, context=ctx)
 
     assert backend.started[0]["env"] == {
@@ -349,6 +356,7 @@ async def test_spawn_workers_sets_badge_metadata(tmp_path, monkeypatch):
         "workers": [{
             "project_path": str(repo_path),
             "name": "Worker1",
+            "model": "sonnet",
             "badge": "Preferred badge",
         }],
     }, context=ctx)
@@ -356,3 +364,110 @@ async def test_spawn_workers_sets_badge_metadata(tmp_path, monkeypatch):
     session = result["sessions"]["Worker1"]
     assert session["coordinator_badge"] == "Preferred badge"
     assert backend.create_calls[0]["coordinator_badge"] == "Preferred badge"
+
+
+def test_claude_cli_build_args_includes_model():
+    """build_args(model="haiku") should produce ["--model", "haiku"] in the args."""
+    from maniple_mcp.cli_backends.claude import ClaudeCLI
+
+    cli = ClaudeCLI()
+    args = cli.build_args(model="haiku")
+    assert "--model" in args
+    idx = args.index("--model")
+    assert args[idx + 1] == "haiku"
+
+
+def test_claude_cli_build_args_without_model():
+    """build_args without model should not include --model."""
+    from maniple_mcp.cli_backends.claude import ClaudeCLI
+
+    cli = ClaudeCLI()
+    args = cli.build_args()
+    assert "--model" not in args
+
+
+@pytest.mark.asyncio
+async def test_spawn_workers_requires_model(tmp_path, monkeypatch):
+    """spawn_workers should reject workers missing the required 'model' field."""
+    from mcp.server.fastmcp.exceptions import ToolError
+
+    config = default_config()
+    monkeypatch.setattr(spawn_workers_module, "load_config", lambda: config)
+
+    backend = FakeBackend()
+    registry = SessionRegistry()
+    app_ctx = SimpleNamespace(registry=registry, backend=backend)
+
+    async def ensure_connection(app_context):
+        return app_context.backend
+
+    mcp = FastMCP("test")
+    spawn_workers_module.register_tools(mcp, ensure_connection)
+    tool = mcp._tool_manager.get_tool("spawn_workers")
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=app_ctx))
+    with pytest.raises(ToolError, match="model"):
+        await tool.run({
+            "workers": [{"project_path": str(repo_path), "name": "Worker1"}],
+        }, context=ctx)
+
+
+@pytest.mark.asyncio
+async def test_spawn_workers_passes_model_to_backend(tmp_path, monkeypatch):
+    """spawn_workers should pass model through to start_agent_in_session."""
+    config = default_config()
+    config.defaults = DefaultsConfig(
+        agent_type="claude",
+        skip_permissions=False,
+        use_worktree=False,
+        layout="new",
+    )
+    monkeypatch.setattr(spawn_workers_module, "load_config", lambda: config)
+    monkeypatch.setattr(spawn_workers_module, "get_cli_backend", lambda *_: "cli:claude")
+    monkeypatch.setattr(spawn_workers_module, "get_worktree_tracker_dir", lambda *_: None)
+    monkeypatch.setattr(
+        spawn_workers_module,
+        "generate_worker_prompt",
+        lambda *args, **kwargs: "PROMPT",
+    )
+    monkeypatch.setattr(
+        spawn_workers_module,
+        "get_coordinator_guidance",
+        lambda *args, **kwargs: {"summary": "ok"},
+    )
+
+    async def fake_await_marker_in_jsonl(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(session_state, "await_marker_in_jsonl", fake_await_marker_in_jsonl)
+    monkeypatch.setattr(session_state, "generate_marker_message", lambda *args, **kwargs: "MARKER")
+
+    backend = FakeBackend()
+    registry = SessionRegistry()
+    app_ctx = SimpleNamespace(registry=registry, backend=backend)
+
+    async def ensure_connection(app_context):
+        return app_context.backend
+
+    mcp = FastMCP("test")
+    spawn_workers_module.register_tools(mcp, ensure_connection)
+    tool = mcp._tool_manager.get_tool("spawn_workers")
+
+    repo_path = tmp_path / "repo"
+    repo_path.mkdir()
+
+    ctx = SimpleNamespace(request_context=SimpleNamespace(lifespan_context=app_ctx))
+    result = await tool.run({
+        "workers": [{
+            "project_path": str(repo_path),
+            "name": "Worker1",
+            "model": "sonnet",
+        }],
+    }, context=ctx)
+
+    assert "error" not in result
+    # The FakeBackend captures kwargs — verify model was passed
+    assert backend.started[0].get("model") == "sonnet"

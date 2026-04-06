@@ -50,6 +50,7 @@ class WorkerConfig(TypedDict, total=False):
     resume: str  # Optional: Resume a named session (--resume flag). Skips --name if set.
     use_worktree: bool  # Optional: Create isolated worktree (default True)
     worktree: WorktreeConfig  # Optional: Worktree settings (branch/base)
+    model: Required[str]  # Required: Model for the CLI (e.g., "sonnet", "opus", "haiku")
     plugin_dir: str | list[str]  # Optional: Path(s) to plugin directory for --plugin-dir
 
 
@@ -106,6 +107,11 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                   }
                 }
                 ```
+            model: Required. The Claude model to use for this worker.
+                Passed as `claude --model {model}`. Common values:
+                - "sonnet": Best for implementation (code generation)
+                - "opus": Best for planning, review, and deep reasoning
+                - "haiku": Best for lightweight verification tasks
             agent_type: Which agent CLI to use (default "claude").
                 - "claude": Claude Code CLI (Stop hook idle detection)
                 - "codex": OpenAI Codex CLI (JSONL streaming idle detection)
@@ -257,6 +263,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
         for i, w in enumerate(workers):
             if "project_path" not in w:
                 return error_response(f"Worker {i} missing required 'project_path'")
+
 
         # Ensure we have a fresh backend connection/state
         backend = await ensure_connection(app_ctx)
@@ -615,6 +622,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                     skip_permissions = False
                 plugin_dir = worker_config.get("plugin_dir")
                 resume_session = worker_config.get("resume")
+                model = worker_config["model"]
                 await backend.start_agent_in_session(
                     handle=session,
                     cli=cli,
@@ -625,6 +633,7 @@ def register_tools(mcp: FastMCP, ensure_connection) -> None:
                     plugin_dir=plugin_dir,
                     session_name=resolved_names[index],
                     resume_session=resume_session,
+                    model=model,
                 )
 
             await asyncio.gather(*[start_agent_for_worker(i) for i in range(worker_count)])

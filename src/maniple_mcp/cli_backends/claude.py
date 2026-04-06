@@ -86,6 +86,7 @@ class ClaudeCLI(AgentCLI):
         plugin_dir: str | list[str] | None = None,
         session_name: str | None = None,
         resume_session: str | None = None,
+        model: str | None = None,
     ) -> list[str]:
         """
         Build Claude CLI arguments.
@@ -96,11 +97,16 @@ class ClaudeCLI(AgentCLI):
             plugin_dir: Path(s) to plugin directory for --plugin-dir (single string or list)
             session_name: Optional session display name (--name flag, requires Claude Code 2.1.76+)
             resume_session: Optional session name/ID to resume (--resume flag, requires Claude Code 2.1.76+)
+            model: Optional model override (e.g., "sonnet", "opus", "haiku")
 
         Returns:
             List of CLI arguments
         """
         args: list[str] = []
+
+        if model:
+            args.append("--model")
+            args.append(model)
 
         if dangerously_skip_permissions:
             args.append("--dangerously-skip-permissions")
